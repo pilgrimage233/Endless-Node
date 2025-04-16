@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cc.endmc.endlessnode.mapper.AccessTokensMapper">
+
+    <resultMap id="BaseResultMap" type="cc.endmc.endlessnode.domain.AccessTokens">
+        <id property="token" column="token"/>
+        <result property="masterId" column="master_id"/>
+        <result property="expiresAt" column="expires_at"/>
+        <result property="scope" column="scope"/>
+        <result property="createdAt" column="created_at"/>
+    </resultMap>
+
+    <sql id="Base_Column_List">
+        token,master_id,expires_at,scope,created_at
+    </sql>
+</mapper>

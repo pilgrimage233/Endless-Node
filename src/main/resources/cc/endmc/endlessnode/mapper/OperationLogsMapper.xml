@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cc.endmc.endlessnode.mapper.OperationLogsMapper">
+
+    <resultMap id="BaseResultMap" type="cc.endmc.endlessnode.domain.OperationLogs">
+        <id property="id" column="id"/>
+        <result property="masterId" column="master_id"/>
+        <result property="operationType" column="operation_type"/>
+        <result property="operationTime" column="operation_time"/>
+        <result property="isSuccess" column="is_success"/>
+        <result property="detail" column="detail"/>
+        <result property="targetInstanceId" column="target_instance_id"/>
+        <result property="clientIp" column="client_ip"/>
+        <result property="userAgent" column="user_agent"/>
+    </resultMap>
+
+    <sql id="Base_Column_List">
+        id,master_id,operation_type,operation_time,is_success,detail,
+        target_instance_id,client_ip,user_agent
+    </sql>
+</mapper>

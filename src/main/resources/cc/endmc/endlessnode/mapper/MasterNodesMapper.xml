@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cc.endmc.endlessnode.mapper.MasterNodesMapper">
+
+    <resultMap id="BaseResultMap" type="cc.endmc.endlessnode.domain.MasterNodes">
+        <id property="id" column="id"/>
+        <result property="uuid" column="uuid"/>
+        <result property="version" column="version"/>
+        <result property="secretKey" column="secret_key"/>
+        <result property="ipAddress" column="ip_address"/>
+        <result property="registeredAt" column="registered_at"/>
+        <result property="lastCommunication" column="last_communication"/>
+        <result property="isDeleted" column="is_deleted"/>
+        <result property="protocolVersion" column="protocol_version"/>
+    </resultMap>
+
+    <sql id="Base_Column_List">
+        id,uuid,version,secret_key,ip_address,registered_at,
+        last_communication,is_deleted,protocol_version
+    </sql>
+</mapper>

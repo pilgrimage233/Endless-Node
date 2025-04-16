@@ -1,0 +1,47 @@
+# 应用信息
+node:
+  version: 1.0
+
+# 开发环境配置
+server:
+  port: 8085
+  tomcat:
+    # tomcat的URI编码
+    uri-encoding: UTF-8
+    # 连接数满后的排队数，默认为100
+    accept-count: 100
+    threads:
+      # tomcat最大线程数，默认为200
+      max: 200
+      # Tomcat启动初始化的线程数，默认值10
+      min-spare: 10
+# 日志配置
+logging:
+  level:
+    cc.endmc: debug
+    org.springframework: warn
+# Spring配置
+spring:
+  devtools:
+    restart:
+      # 热部署开关
+      enabled: true
+  datasource:
+    driver-class-name: org.sqlite.JDBC
+    url: jdbc:sqlite:file:./node.db  # 使用文件模式（持久化存储）
+    username:
+    password:
+    hikari:
+      maximum-pool-size: 1  # SQLite建议单连接
+      connection-timeout: 30000
+  sql:
+    init:
+      mode: always
+      data-locations: classpath:schema.sql
+# MyBatis-Plus 配置
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true # 自动转换下划线命名到驼峰
+  global-config:
+    db-config:
+      id-type: auto  # 主键自增
