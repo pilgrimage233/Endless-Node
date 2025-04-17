@@ -1,5 +1,6 @@
 package cc.endmc.endlessnode.config;
 
+import cc.endmc.endlessnode.common.TokenCache;
 import cc.endmc.endlessnode.domain.AccessTokens;
 import cc.endmc.endlessnode.service.AccessTokensService;
 import jakarta.servlet.http.HttpServletRequest;
@@ -43,9 +44,19 @@ public class TokenInterceptor implements HandlerInterceptor {
         }
 
         // 验证token
-        AccessTokens accessToken = accessTokensService.lambdaQuery()
-                .eq(AccessTokens::getToken, token)
-                .one();
+        AccessTokens accessToken;
+
+        if (TokenCache.containsKey(token)) {
+            accessToken = TokenCache.get(token);
+        } else {
+            accessToken = accessTokensService.lambdaQuery()
+                    .eq(AccessTokens::getToken, token)
+                    .one();
+            if (accessToken != null) {
+                // 将token存入缓存
+                TokenCache.put(token, accessToken);
+            }
+        }
 
         // 如果token不存在或已过期，返回401未授权
         if (accessToken == null || accessToken.getExpiresAt().before(new Date())) {

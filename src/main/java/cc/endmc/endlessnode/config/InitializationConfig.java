@@ -1,5 +1,6 @@
 package cc.endmc.endlessnode.config;
 
+import cc.endmc.endlessnode.common.TokenCache;
 import cc.endmc.endlessnode.domain.AccessTokens;
 import cc.endmc.endlessnode.service.AccessTokensService;
 import lombok.RequiredArgsConstructor;
@@ -44,6 +45,13 @@ public class InitializationConfig {
             } else {
                 log.info("秘钥存在: {}", list.get(0).getToken());
             }
+            // token缓存
+            accessTokensService.list().forEach(accessToken -> {
+                TokenCache.put(accessToken.getToken(), accessToken);
+            });
+            log.info("Token缓存初始化完成，当前缓存数量: {}", TokenCache.size());
         };
+
+
     }
 }
