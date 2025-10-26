@@ -207,8 +207,8 @@ public class AuthController {
             return ResponseEntity.status(401).body(Map.of("valid", false, "message", "Invalid token"));
         }
 
-        // 检查令牌是否过期
-        if (accessToken.getExpiresAt().before(new Date())) {
+        // 检查令牌是否过期（永久Token永不过期）
+        if (accessToken.getExpiresAt().getTime() != Long.MAX_VALUE && accessToken.getExpiresAt().before(new Date())) {
             return ResponseEntity.status(401).body(Map.of("valid", false, "message", "Token expired"));
         }
 

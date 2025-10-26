@@ -92,6 +92,12 @@
             <version>3.0.3</version> <!-- Spring Boot 3.x 默认集成此版本 -->
         </dependency>
 
+        <!-- BCrypt 密码加密 -->
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-crypto</artifactId>
+        </dependency>
+
     </dependencies>
 
     <build>

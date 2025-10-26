@@ -60,6 +60,7 @@ CREATE TABLE IF NOT EXISTS access_tokens
     master_id  INTEGER  NOT NULL, -- 关联 master_nodes.id
     expires_at DATETIME NOT NULL, -- 过期时间
     scope      TEXT     NOT NULL, -- 权限范围 (SERVER_CONTROL/FILE_MANAGE)
+    remark     TEXT,              -- 备注信息
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 
     FOREIGN KEY (master_id) REFERENCES master_nodes (id)
@@ -72,6 +73,22 @@ CREATE TABLE IF NOT EXISTS node_metadata
     value       TEXT NOT NULL,    -- 配置值 (JSON格式)
     description TEXT              -- 配置说明
 );
+
+-- 用户表
+CREATE TABLE IF NOT EXISTS users
+(
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    username   TEXT    NOT NULL UNIQUE, -- 用户名
+    password   TEXT    NOT NULL,        -- 密码（实际项目中应该加密）
+    role       TEXT    NOT NULL,        -- 用户角色 (ADMIN/USER)
+    enabled    INTEGER  DEFAULT 1,       -- 是否启用 (0:禁用, 1:启用)
+    first_login INTEGER DEFAULT 1,      -- 是否首次登录 (0:否, 1:是)
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    last_login DATETIME                 -- 最后登录时间
+);
+
+CREATE INDEX IF NOT EXISTS idx_users_username ON users (username);
+CREATE INDEX IF NOT EXISTS idx_users_enabled ON users (enabled);
 
 -- 初始数据示例
 INSERT OR IGNORE INTO node_metadata (key, value, description)

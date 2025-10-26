@@ -37,6 +37,11 @@ public class AccessTokens implements Serializable {
     @TableField(value = "scope")
     private String scope;
     /**
+     * 备注信息
+     */
+    @TableField(value = "remark")
+    private String remark;
+    /**
      *
      */
     @TableField(value = "created_at")
@@ -58,6 +63,7 @@ public class AccessTokens implements Serializable {
                 && (this.getMasterId() == null ? other.getMasterId() == null : this.getMasterId().equals(other.getMasterId()))
                 && (this.getExpiresAt() == null ? other.getExpiresAt() == null : this.getExpiresAt().equals(other.getExpiresAt()))
                 && (this.getScope() == null ? other.getScope() == null : this.getScope().equals(other.getScope()))
+                && (this.getRemark() == null ? other.getRemark() == null : this.getRemark().equals(other.getRemark()))
                 && (this.getCreatedAt() == null ? other.getCreatedAt() == null : this.getCreatedAt().equals(other.getCreatedAt()));
     }
 
@@ -69,6 +75,7 @@ public class AccessTokens implements Serializable {
         result = prime * result + ((getMasterId() == null) ? 0 : getMasterId().hashCode());
         result = prime * result + ((getExpiresAt() == null) ? 0 : getExpiresAt().hashCode());
         result = prime * result + ((getScope() == null) ? 0 : getScope().hashCode());
+        result = prime * result + ((getRemark() == null) ? 0 : getRemark().hashCode());
         result = prime * result + ((getCreatedAt() == null) ? 0 : getCreatedAt().hashCode());
         return result;
     }
@@ -83,6 +90,7 @@ public class AccessTokens implements Serializable {
         sb.append(", masterId=").append(masterId);
         sb.append(", expiresAt=").append(expiresAt);
         sb.append(", scope=").append(scope);
+        sb.append(", remark=").append(remark);
         sb.append(", createdAt=").append(createdAt);
         sb.append(", serialVersionUID=").append(serialVersionUID);
         sb.append("]");

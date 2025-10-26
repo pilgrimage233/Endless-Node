@@ -1,10 +1,15 @@
 package cc.endmc.endlessnode.controller;
 
+import cc.endmc.endlessnode.domain.MasterNodes;
+import cc.endmc.endlessnode.dto.HeartbeatResponse;
+import cc.endmc.endlessnode.dto.MasterNodeUpdateRequest;
+import cc.endmc.endlessnode.service.MasterNodesService;
+import cc.endmc.endlessnode.service.ServerInstancesService;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
 import oshi.SystemInfo;
 import oshi.hardware.*;
 import oshi.software.os.FileSystem;
@@ -12,15 +17,26 @@ import oshi.software.os.OSFileStore;
 import oshi.software.os.OperatingSystem;
 import oshi.util.Util;
 
+import java.lang.management.ManagementFactory;
+import java.lang.management.RuntimeMXBean;
 import java.util.ArrayList;
+import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
+@Slf4j
 @RestController
 @RequestMapping("/api/system")
 @RequiredArgsConstructor
 public class SystemController {
+
+    private final ServerInstancesService serverInstancesService;
+    private final MasterNodesService masterNodesService;
+
+    @Value("${node.version}")
+    private String nodeVersion;
 
     /**
      * 获取系统基本信息
@@ -379,5 +395,458 @@ public class SystemController {
         loadInfo.put("network", network);
 
         return loadInfo;
+    }
+
+    /**
+     * 心跳检测接口
+     * 主控端调用此接口获取节点状态信息
+     *
+     * @return 心跳响应信息
+     */
+    @GetMapping("/heartbeat")
+    public ResponseEntity<HeartbeatResponse> heartbeat() {
+        HeartbeatResponse response = new HeartbeatResponse();
+
+        // 设置基本状态信息
+        response.setStatus("OJBK");
+        response.setVersion(nodeVersion); // 可以从配置文件读取
+        response.setProtocolVersion("1.0");
+        response.setTimestamp(new Date());
+
+        // 获取JVM运行时间
+        RuntimeMXBean runtimeBean = ManagementFactory.getRuntimeMXBean();
+        response.setUptime(runtimeBean.getUptime());
+
+        // 获取系统信息
+        response.setSystemInfo(getHeartbeatSystemInfo());
+
+        // 获取服务器实例统计
+        response.setServerStats(getServerStats());
+
+        // 获取系统负载信息
+        response.setSystemLoad(getSystemLoad(new SystemInfo().getHardware()));
+
+        return ResponseEntity.ok(response);
+    }
+
+    /**
+     * 获取心跳检测用的系统基本信息
+     *
+     * @return 系统信息
+     */
+    private HeartbeatResponse.SystemInfo getHeartbeatSystemInfo() {
+        HeartbeatResponse.SystemInfo systemInfo = new HeartbeatResponse.SystemInfo();
+
+        // 操作系统信息
+        OperatingSystem os = new SystemInfo().getOperatingSystem();
+        systemInfo.setOsName(os.getFamily() + " " + os.getVersionInfo().getVersion());
+        systemInfo.setOsVersion(os.getVersionInfo().toString());
+        systemInfo.setArchitecture(System.getProperty("os.arch"));
+
+        // Java信息
+        systemInfo.setJavaVersion(System.getProperty("java.version"));
+        systemInfo.setAvailableProcessors(Runtime.getRuntime().availableProcessors());
+
+        // 内存信息
+        systemInfo.setTotalMemory(Runtime.getRuntime().totalMemory());
+        systemInfo.setFreeMemory(Runtime.getRuntime().freeMemory());
+        systemInfo.setMaxMemory(Runtime.getRuntime().maxMemory());
+
+        return systemInfo;
+    }
+
+    /**
+     * 获取服务器实例统计信息
+     *
+     * @return 服务器统计信息
+     */
+    private HeartbeatResponse.ServerStats getServerStats() {
+        HeartbeatResponse.ServerStats stats = new HeartbeatResponse.ServerStats();
+
+        // 获取所有服务器实例
+        List<cc.endmc.endlessnode.domain.ServerInstances> allInstances = serverInstancesService.list();
+
+        stats.setTotalInstances(allInstances.size());
+
+        // 统计运行状态
+        long runningCount = allInstances.stream()
+                .filter(instance -> "running".equals(instance.getStatus()))
+                .count();
+        stats.setRunningInstances((int) runningCount);
+        stats.setStoppedInstances(allInstances.size() - (int) runningCount);
+
+        // 计算总分配内存
+        int totalMemory = allInstances.stream()
+                .mapToInt(instance -> instance.getMemoryMb() != null ? instance.getMemoryMb() : 0)
+                .sum();
+        stats.setTotalAllocatedMemory(totalMemory);
+
+        // 构建实例信息列表
+        List<HeartbeatResponse.InstanceInfo> instanceInfos = allInstances.stream()
+                .map(this::convertToInstanceInfo)
+                .collect(Collectors.toList());
+        stats.setInstances(instanceInfos);
+
+        return stats;
+    }
+
+    /**
+     * 转换服务器实例为实例信息
+     *
+     * @param instance 服务器实例
+     * @return 实例信息
+     */
+    private HeartbeatResponse.InstanceInfo convertToInstanceInfo(cc.endmc.endlessnode.domain.ServerInstances instance) {
+        HeartbeatResponse.InstanceInfo info = new HeartbeatResponse.InstanceInfo();
+        info.setId(instance.getId());
+        info.setName(instance.getInstanceName());
+        info.setStatus(instance.getStatus());
+        info.setPort(instance.getPort());
+        info.setMemoryMb(instance.getMemoryMb());
+        info.setCoreType(instance.getCoreType());
+        info.setVersion(instance.getVersion());
+        return info;
+    }
+
+    /**
+     * 最后通信回调接口
+     * 主控端调用此接口更新最后通信时间
+     *
+     * @param masterUuid 主控端UUID
+     * @return 更新结果
+     */
+    @GetMapping("/communication-callback")
+    public ResponseEntity<Map<String, Object>> communicationCallback(@RequestParam String masterUuid) {
+        Map<String, Object> response = new HashMap<>();
+
+        try {
+            // 验证参数
+            if (masterUuid == null || masterUuid.trim().isEmpty()) {
+                response.put("success", false);
+                response.put("message", "主控端UUID不能为空");
+                return ResponseEntity.badRequest().body(response);
+            }
+
+            // 查找对应的主控端记录
+            List<MasterNodes> masterNodes = masterNodesService.list();
+            MasterNodes targetMaster = null;
+
+            for (MasterNodes master : masterNodes) {
+                if (masterUuid.equals(master.getUuid())) {
+                    targetMaster = master;
+                    break;
+                }
+            }
+
+            if (targetMaster == null) {
+                response.put("success", false);
+                response.put("message", "未找到对应的主控端记录");
+                return ResponseEntity.notFound().build();
+            }
+
+            // 更新最后通信时间
+            targetMaster.setLastCommunication(new Date());
+            boolean updateResult = masterNodesService.updateById(targetMaster);
+
+            if (updateResult) {
+                response.put("success", true);
+                response.put("message", "最后通信时间更新成功");
+                response.put("lastCommunication", targetMaster.getLastCommunication());
+            } else {
+                response.put("success", false);
+                response.put("message", "最后通信时间更新失败");
+            }
+
+            return ResponseEntity.ok(response);
+
+        } catch (Exception e) {
+            response.put("success", false);
+            response.put("message", "更新最后通信时间时发生错误: " + e.getMessage());
+            return ResponseEntity.internalServerError().body(response);
+        }
+    }
+
+    /**
+     * 最后通信回调接口（带IP地址）
+     * 主控端调用此接口更新最后通信时间和IP地址
+     *
+     * @param masterUuid 主控端UUID
+     * @param ipAddress  主控端IP地址（可选）
+     * @return 更新结果
+     */
+    @GetMapping("/communication-callback-with-ip/{masterUuid}/{ipAddress}")
+    public ResponseEntity<Map<String, Object>> communicationCallbackWithIp(
+            @PathVariable String masterUuid,
+            @PathVariable(required = false) String ipAddress) {
+        Map<String, Object> response = new HashMap<>();
+
+        try {
+            // 验证参数
+            if (masterUuid == null || masterUuid.trim().isEmpty()) {
+                response.put("success", false);
+                response.put("message", "主控端UUID不能为空");
+                return ResponseEntity.badRequest().body(response);
+            }
+
+            // 查找对应的主控端记录
+            List<MasterNodes> masterNodes = masterNodesService.list();
+            MasterNodes targetMaster = null;
+
+            for (MasterNodes master : masterNodes) {
+                if (masterUuid.equals(master.getUuid())) {
+                    targetMaster = master;
+                    break;
+                }
+            }
+
+            if (targetMaster == null) {
+                response.put("success", false);
+                response.put("message", "未找到对应的主控端记录");
+                return ResponseEntity.notFound().build();
+            }
+
+            // 更新最后通信时间和IP地址
+            targetMaster.setLastCommunication(new Date());
+            if (ipAddress != null && !ipAddress.trim().isEmpty()) {
+                targetMaster.setIpAddress(ipAddress);
+            }
+
+            boolean updateResult = masterNodesService.updateById(targetMaster);
+
+            if (updateResult) {
+                response.put("success", true);
+                response.put("message", "最后通信时间和IP地址更新成功");
+                response.put("lastCommunication", targetMaster.getLastCommunication());
+                response.put("ipAddress", targetMaster.getIpAddress());
+            } else {
+                response.put("success", false);
+                response.put("message", "最后通信时间和IP地址更新失败");
+            }
+
+            return ResponseEntity.ok(response);
+
+        } catch (Exception e) {
+            response.put("success", false);
+            response.put("message", "更新最后通信时间时发生错误: " + e.getMessage());
+            return ResponseEntity.internalServerError().body(response);
+        }
+    }
+
+    /**
+     * 主控端信息更新接口
+     * 主控端首次启动或信息变更时调用此接口更新主控端信息
+     *
+     * @param request 主控端信息更新请求
+     * @return 更新结果
+     */
+    @PostMapping("/master-info-update")
+    public ResponseEntity<Map<String, Object>> updateMasterInfo(@RequestBody MasterNodeUpdateRequest request) {
+        Map<String, Object> response = new HashMap<>();
+
+        try {
+            // 验证参数
+            if (request.getMasterUuid() == null || request.getMasterUuid().trim().isEmpty()) {
+                response.put("success", false);
+                response.put("message", "主控端UUID不能为空");
+                return ResponseEntity.badRequest().body(response);
+            }
+
+            // 查找对应的主控端记录
+            List<MasterNodes> masterNodes = masterNodesService.list();
+            MasterNodes targetMaster = null;
+
+            for (MasterNodes master : masterNodes) {
+                if (request.getMasterUuid().equals(master.getUuid())) {
+                    targetMaster = master;
+                    break;
+                }
+            }
+
+            if (targetMaster == null) {
+                response.put("success", false);
+                response.put("message", "未找到对应的主控端记录");
+                return ResponseEntity.notFound().build();
+            }
+
+            // 更新主控端信息
+            boolean hasUpdate = false;
+
+            // 更新版本号
+            if (request.getVersion() != null && !request.getVersion().trim().isEmpty()) {
+                targetMaster.setVersion(request.getVersion());
+                hasUpdate = true;
+            }
+
+            // 更新协议版本
+            if (request.getProtocolVersion() != null && !request.getProtocolVersion().trim().isEmpty()) {
+                targetMaster.setProtocolVersion(request.getProtocolVersion());
+                hasUpdate = true;
+            }
+
+            // 更新IP地址
+            if (request.getIpAddress() != null && !request.getIpAddress().trim().isEmpty()) {
+                targetMaster.setIpAddress(request.getIpAddress());
+                hasUpdate = true;
+            }
+
+            // 更新最后通信时间
+            targetMaster.setLastCommunication(new Date());
+            hasUpdate = true;
+
+            if (!hasUpdate) {
+                response.put("success", false);
+                response.put("message", "没有需要更新的信息");
+                return ResponseEntity.badRequest().body(response);
+            }
+
+            // 执行数据库更新
+            boolean updateResult = masterNodesService.updateById(targetMaster);
+
+            if (updateResult) {
+                response.put("success", true);
+                response.put("message", "主控端信息更新成功");
+                response.put("updatedFields", getUpdatedFields(request));
+                response.put("lastCommunication", targetMaster.getLastCommunication());
+            } else {
+                response.put("success", false);
+                response.put("message", "主控端信息更新失败");
+            }
+
+            return ResponseEntity.ok(response);
+
+        } catch (Exception e) {
+            response.put("success", false);
+            response.put("message", "更新主控端信息时发生错误: " + e.getMessage());
+            return ResponseEntity.internalServerError().body(response);
+        }
+    }
+
+    /**
+     * 获取更新的字段列表
+     *
+     * @param request 更新请求
+     * @return 更新的字段列表
+     */
+    private List<String> getUpdatedFields(MasterNodeUpdateRequest request) {
+        List<String> updatedFields = new ArrayList<>();
+
+        if (request.getVersion() != null && !request.getVersion().trim().isEmpty()) {
+            updatedFields.add("version");
+        }
+        if (request.getProtocolVersion() != null && !request.getProtocolVersion().trim().isEmpty()) {
+            updatedFields.add("protocolVersion");
+        }
+        if (request.getIpAddress() != null && !request.getIpAddress().trim().isEmpty()) {
+            updatedFields.add("ipAddress");
+        }
+        updatedFields.add("lastCommunication");
+
+        return updatedFields;
+    }
+
+    /**
+     * 主控端信息更新接口（简化版，使用URL参数）
+     * 主控端首次启动时调用此接口更新基本信息
+     *
+     * @param masterUuid      主控端UUID
+     * @param version         主控端版本号
+     * @param protocolVersion 协议版本
+     * @param ipAddress       主控端IP地址
+     * @return 更新结果
+     */
+    @GetMapping("/master-info-update-simple")
+    public ResponseEntity<Map<String, Object>> updateMasterInfoSimple(
+            @RequestParam String masterUuid,
+            @RequestParam(required = false) String version,
+            @RequestParam(required = false) String protocolVersion,
+            @RequestParam(required = false) String ipAddress) {
+
+        Map<String, Object> response = new HashMap<>();
+
+        try {
+            // 验证参数
+            if (masterUuid == null || masterUuid.trim().isEmpty()) {
+                response.put("success", false);
+                response.put("message", "主控端UUID不能为空");
+                return ResponseEntity.badRequest().body(response);
+            }
+
+            // 查找对应的主控端记录
+            List<MasterNodes> masterNodes = masterNodesService.list();
+            MasterNodes targetMaster = null;
+
+            for (MasterNodes master : masterNodes) {
+                if (masterUuid.equals(master.getUuid())) {
+                    targetMaster = master;
+                    break;
+                }
+            }
+
+            if (targetMaster == null) {
+                response.put("success", false);
+                response.put("message", "未找到对应的主控端记录");
+                return ResponseEntity.notFound().build();
+            }
+
+            // 更新主控端信息
+            boolean hasUpdate = false;
+
+            // 更新版本号
+            if (version != null && !version.trim().isEmpty()) {
+                targetMaster.setVersion(version);
+                hasUpdate = true;
+            }
+
+            // 更新协议版本
+            if (protocolVersion != null && !protocolVersion.trim().isEmpty()) {
+                targetMaster.setProtocolVersion(protocolVersion);
+                hasUpdate = true;
+            }
+
+            // 更新IP地址
+            if (ipAddress != null && !ipAddress.trim().isEmpty()) {
+                targetMaster.setIpAddress(ipAddress);
+                hasUpdate = true;
+            }
+
+            // 更新最后通信时间
+            targetMaster.setLastCommunication(new Date());
+            hasUpdate = true;
+
+            if (!hasUpdate) {
+                response.put("success", false);
+                response.put("message", "没有需要更新的信息");
+                return ResponseEntity.badRequest().body(response);
+            }
+
+            // 执行数据库更新
+            boolean updateResult = masterNodesService.updateById(targetMaster);
+
+            if (updateResult) {
+                response.put("success", true);
+                response.put("message", "主控端信息更新成功");
+                response.put("version", targetMaster.getVersion());
+                response.put("protocolVersion", targetMaster.getProtocolVersion());
+                response.put("ipAddress", targetMaster.getIpAddress());
+                response.put("lastCommunication", targetMaster.getLastCommunication());
+                log.info("主控端信息更新成功: UUID={}, Version={}, ProtocolVersion={}, IP={}",
+                        masterUuid, targetMaster.getVersion(),
+                        targetMaster.getProtocolVersion(),
+                        targetMaster.getIpAddress());
+
+            } else {
+                response.put("success", false);
+                response.put("message", "主控端信息更新失败");
+                log.warn("主控端信息更新失败: UUID={}", masterUuid);
+            }
+
+            return ResponseEntity.ok(response);
+
+        } catch (Exception e) {
+            response.put("success", false);
+            response.put("message", "更新主控端信息时发生错误: " + e.getMessage());
+            log.error(e.getMessage(), e);
+            return ResponseEntity.internalServerError().body(response);
+        }
     }
 } 
