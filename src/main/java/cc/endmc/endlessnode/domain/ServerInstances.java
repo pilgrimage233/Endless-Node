@@ -66,7 +66,7 @@ public class ServerInstances implements Serializable {
      *
      */
     @TableField(value = "created_by")
-    private Integer createdBy;
+    private String createdBy;
     /**
      *
      */

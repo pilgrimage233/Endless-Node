@@ -1,0 +1,827 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta content="width=device-width, initial-scale=1.0" name="viewport">
+    <title>Endless Node - WebSocket 控制台测试</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: #333;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+            color: white;
+        }
+
+        .header h1 {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+            text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+        }
+
+        .header p {
+            font-size: 1.1rem;
+            opacity: 0.9;
+        }
+
+        .card {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            padding: 30px;
+            margin-bottom: 30px;
+        }
+
+        .card h2 {
+            color: #2d3748;
+            margin-bottom: 20px;
+            font-size: 1.5rem;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .form-row {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #4a5568;
+        }
+
+        .form-group input,
+        .form-group select {
+            width: 100%;
+            padding: 12px 16px;
+            border: 2px solid #e2e8f0;
+            border-radius: 8px;
+            font-size: 16px;
+            transition: border-color 0.3s ease;
+        }
+
+        .form-group input:focus,
+        .form-group select:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        .btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+            margin-right: 10px;
+            margin-bottom: 10px;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .btn-danger {
+            background: linear-gradient(135deg, #f56565 0%, #e53e3e 100%);
+        }
+
+        .btn-danger:hover {
+            box-shadow: 0 4px 12px rgba(245, 101, 101, 0.4);
+        }
+
+        .btn-success {
+            background: linear-gradient(135deg, #48bb78 0%, #38a169 100%);
+        }
+
+        .btn-success:hover {
+            box-shadow: 0 4px 12px rgba(72, 187, 120, 0.4);
+        }
+
+        .console-container {
+            background: #1a202c;
+            border-radius: 8px;
+            padding: 20px;
+            margin-top: 20px;
+        }
+
+        .console-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+            color: #e2e8f0;
+        }
+
+        .console-output {
+            background: #2d3748;
+            border: 1px solid #4a5568;
+            border-radius: 6px;
+            padding: 15px;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            color: #68d391;
+            height: 400px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+
+        .console-input {
+            display: flex;
+            gap: 10px;
+            margin-top: 15px;
+        }
+
+        .console-input input {
+            flex: 1;
+            background: #2d3748;
+            border: 1px solid #4a5568;
+            border-radius: 6px;
+            padding: 10px 15px;
+            color: #e2e8f0;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+        }
+
+        .console-input input:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.3);
+        }
+
+        .status-indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+
+        .status-connected {
+            background: #48bb78;
+            box-shadow: 0 0 8px rgba(72, 187, 120, 0.6);
+        }
+
+        .status-disconnected {
+            background: #f56565;
+            box-shadow: 0 0 8px rgba(245, 101, 101, 0.6);
+        }
+
+        .status-connecting {
+            background: #ed8936;
+            box-shadow: 0 0 8px rgba(237, 137, 54, 0.6);
+        }
+
+        .alert {
+            padding: 12px 16px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            display: none;
+        }
+
+        .alert-success {
+            background: #c6f6d5;
+            color: #22543d;
+            border: 1px solid #9ae6b4;
+        }
+
+        .alert-error {
+            background: #fed7d7;
+            color: #742a2a;
+            border: 1px solid #feb2b2;
+        }
+
+        .alert-info {
+            background: #bee3f8;
+            color: #2a4365;
+            border: 1px solid #90cdf4;
+        }
+
+        .server-info {
+            background: #f7fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 20px;
+        }
+
+        .server-info h4 {
+            color: #2d3748;
+            margin-bottom: 10px;
+            font-size: 16px;
+        }
+
+        .server-details {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+        }
+
+        .server-detail {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .server-detail-label {
+            font-size: 12px;
+            color: #718096;
+            margin-bottom: 4px;
+            text-transform: uppercase;
+            font-weight: 600;
+        }
+
+        .server-detail-value {
+            font-size: 14px;
+            color: #2d3748;
+            font-weight: 500;
+        }
+
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 20px;
+        }
+
+        .spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 10px;
+        }
+
+        @keyframes spin {
+            0% {
+                transform: rotate(0deg);
+            }
+            100% {
+                transform: rotate(360deg);
+            }
+        }
+
+        .back-link {
+            text-align: center;
+            margin-top: 30px;
+        }
+
+        .back-link a {
+            color: white;
+            text-decoration: none;
+            font-weight: 500;
+            padding: 10px 20px;
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.1);
+            transition: background 0.3s ease;
+        }
+
+        .back-link a:hover {
+            background: rgba(255, 255, 255, 0.2);
+            text-decoration: none;
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                padding: 10px;
+            }
+
+            .header h1 {
+                font-size: 2rem;
+            }
+
+            .form-row {
+                grid-template-columns: 1fr;
+            }
+
+            .console-input {
+                flex-direction: column;
+            }
+
+            .console-output {
+                height: 300px;
+            }
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <div class="header">
+        <h1>🖥️ WebSocket 控制台测试</h1>
+        <p>Endless Node 服务器控制台实时监控</p>
+    </div>
+
+    <div class="alert alert-success" id="successAlert"></div>
+    <div class="alert alert-error" id="errorAlert"></div>
+    <div class="alert alert-info" id="infoAlert"></div>
+
+    <!-- 连接配置 -->
+    <div class="card">
+        <h2>🔧 连接配置</h2>
+        <div class="form-row">
+            <div class="form-group">
+                <label for="token">访问令牌 (Token):</label>
+                <input id="token" placeholder="请输入访问令牌" type="text">
+            </div>
+            <div class="form-group">
+                <label for="serverSelect">选择服务器:</label>
+                <select id="serverSelect">
+                    <option value="">请选择服务器...</option>
+                </select>
+            </div>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label>WebSocket 状态: <span id="wsStatus">未连接</span></label>
+                <div style="margin-top: 10px;">
+                    <button class="btn btn-success" id="connectBtn">连接 WebSocket</button>
+                    <button class="btn btn-danger" disabled id="disconnectBtn">断开连接</button>
+                    <button class="btn" id="loadServersBtn">加载服务器列表</button>
+                </div>
+            </div>
+            <div class="form-group">
+                <label for="autoScroll">自动滚动控制台:</label>
+                <div style="margin-top: 10px;">
+                    <input checked id="autoScroll" style="transform: scale(1.2); margin-right: 8px;" type="checkbox">
+                    <span>启用</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 服务器信息 -->
+    <div class="card" id="serverInfoCard" style="display: none;">
+        <h2>📊 服务器信息</h2>
+        <div id="serverInfo"></div>
+    </div>
+
+    <!-- 控制台 -->
+    <div class="card">
+        <h2>💻 服务器控制台</h2>
+        <div class="console-container">
+            <div class="console-header">
+                <div>
+                        <span id="consoleStatus">
+                            <span class="status-indicator status-disconnected"></span>
+                            未连接
+                        </span>
+                </div>
+                <div>
+                    <button class="btn btn-success" disabled id="subscribeBtn">订阅控制台</button>
+                    <button class="btn btn-danger" disabled id="unsubscribeBtn">取消订阅</button>
+                    <button class="btn" id="clearConsoleBtn">清空控制台</button>
+                </div>
+            </div>
+            <div class="console-output" id="consoleOutput">
+                控制台输出将在这里显示...
+            </div>
+            <div class="console-input">
+                <input disabled id="commandInput" placeholder="输入服务器命令 (例如: list, help, stop)" type="text">
+                <button class="btn btn-success" disabled id="sendCommandBtn">发送命令</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="loading" id="loading">
+        <div class="spinner"></div>
+        <p>加载中...</p>
+    </div>
+
+    <div class="back-link">
+        <a href="/index.html">← 返回首页</a>
+    </div>
+</div>
+
+<!-- 引入 SockJS 和 STOMP -->
+<script src="https://cdn.jsdelivr.net/npm/sockjs-client@1.6.1/dist/sockjs.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/stompjs@2.3.3/lib/stomp.min.js"></script>
+
+<script>
+    // 全局变量
+    let stompClient = null;
+    let currentServerId = null;
+    let isSubscribed = false;
+
+    // 显示消息
+    function showAlert(message, type = 'success') {
+        const alertTypes = {
+            'success': 'successAlert',
+            'error': 'errorAlert',
+            'info': 'infoAlert'
+        };
+        const alertId = alertTypes[type];
+        const alert = document.getElementById(alertId);
+        alert.textContent = message;
+        alert.style.display = 'block';
+        setTimeout(() => {
+            alert.style.display = 'none';
+        }, 5000);
+    }
+
+    // 更新 WebSocket 状态
+    function updateWsStatus(status, message) {
+        const statusElement = document.getElementById('wsStatus');
+        statusElement.innerHTML = `<span class="status-indicator status-${status}"></span>${message}`;
+
+        const connectBtn = document.getElementById('connectBtn');
+        const disconnectBtn = document.getElementById('disconnectBtn');
+
+        if (status === 'connected') {
+            connectBtn.disabled = true;
+            disconnectBtn.disabled = false;
+        } else if (status === 'disconnected') {
+            connectBtn.disabled = false;
+            disconnectBtn.disabled = true;
+        } else if (status === 'connecting') {
+            connectBtn.disabled = true;
+            disconnectBtn.disabled = true;
+        }
+    }
+
+    // 更新控制台状态
+    function updateConsoleStatus(status, message) {
+        const statusElement = document.getElementById('consoleStatus');
+        statusElement.innerHTML = `<span class="status-indicator status-${status}"></span>${message}`;
+
+        const subscribeBtn = document.getElementById('subscribeBtn');
+        const unsubscribeBtn = document.getElementById('unsubscribeBtn');
+        const commandInput = document.getElementById('commandInput');
+        const sendCommandBtn = document.getElementById('sendCommandBtn');
+
+        if (status === 'connected' && isSubscribed) {
+            subscribeBtn.disabled = true;
+            unsubscribeBtn.disabled = false;
+            commandInput.disabled = false;
+            sendCommandBtn.disabled = false;
+        } else {
+            subscribeBtn.disabled = false;
+            unsubscribeBtn.disabled = true;
+            commandInput.disabled = true;
+            sendCommandBtn.disabled = true;
+        }
+    }
+
+    // 添加控制台输出
+    function addConsoleOutput(message, type = 'normal') {
+        const consoleOutput = document.getElementById('consoleOutput');
+        const timestamp = new Date().toLocaleTimeString();
+
+        let prefix = '';
+        let color = '';
+
+        switch (type) {
+            case 'error':
+                prefix = '[ERROR] ';
+                color = 'color: #f56565;';
+                break;
+            case 'warning':
+                prefix = '[WARN] ';
+                color = 'color: #ed8936;';
+                break;
+            case 'info':
+                prefix = '[INFO] ';
+                color = 'color: #4299e1;';
+                break;
+            case 'success':
+                prefix = '[SUCCESS] ';
+                color = 'color: #48bb78;';
+                break;
+            default:
+                prefix = '[LOG] ';
+                color = 'color: #68d391;';
+        }
+
+        const formattedMessage = `[${timestamp}] ${prefix}${message}\n`;
+        consoleOutput.textContent += formattedMessage;
+
+        // 自动滚动到底部
+        if (document.getElementById('autoScroll').checked) {
+            consoleOutput.scrollTop = consoleOutput.scrollHeight;
+        }
+    }
+
+    // 连接 WebSocket
+    function connectWebSocket() {
+        const token = document.getElementById('token').value.trim();
+        if (!token) {
+            showAlert('请输入访问令牌', 'error');
+            return;
+        }
+
+        updateWsStatus('connecting', '连接中...');
+
+        // 创建 SockJS 连接
+        const socket = new SockJS('/ws');
+        stompClient = Stomp.over(socket);
+
+        // 禁用调试信息
+        stompClient.debug = null;
+
+        stompClient.connect(
+            {'X-Endless-Token': token},
+            function (frame) {
+                updateWsStatus('connected', '已连接');
+                showAlert('WebSocket 连接成功', 'success');
+
+                // 启用订阅按钮
+                document.getElementById('subscribeBtn').disabled = false;
+            },
+            function (error) {
+                updateWsStatus('disconnected', '连接失败');
+                showAlert('WebSocket 连接失败: ' + error, 'error');
+                console.error('WebSocket connection error:', error);
+            }
+        );
+    }
+
+    // 断开 WebSocket 连接
+    function disconnectWebSocket() {
+        if (stompClient && stompClient.connected) {
+            stompClient.disconnect(() => {
+                updateWsStatus('disconnected', '已断开');
+                updateConsoleStatus('disconnected', '未连接');
+                showAlert('WebSocket 连接已断开', 'info');
+                isSubscribed = false;
+            });
+        }
+    }
+
+    // 加载服务器列表
+    async function loadServers() {
+        const token = document.getElementById('token').value.trim();
+        if (!token) {
+            showAlert('请输入访问令牌', 'error');
+            return;
+        }
+
+        const loading = document.getElementById('loading');
+        loading.style.display = 'block';
+
+        try {
+            const response = await fetch('/api/servers/list', {
+                headers: {
+                    'X-Endless-Token': token
+                }
+            });
+
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+
+            const data = await response.json();
+            const servers = data.servers || [];
+            const serverSelect = document.getElementById('serverSelect');
+
+            serverSelect.innerHTML = '<option value="">请选择服务器...</option>';
+
+            servers.forEach(server => {
+                const option = document.createElement('option');
+                option.value = server.id;
+                option.textContent = `${server.instanceName} (${server.status})`;
+                serverSelect.appendChild(option);
+            });
+
+            showAlert(`成功加载 ${servers.length} 个服务器`, 'success');
+        } catch (error) {
+            showAlert('加载服务器列表失败: ' + error.message, 'error');
+        } finally {
+            loading.style.display = 'none';
+        }
+    }
+
+    // 显示服务器信息
+    function displayServerInfo(server) {
+        const serverInfoCard = document.getElementById('serverInfoCard');
+        const serverInfo = document.getElementById('serverInfo');
+
+        serverInfo.innerHTML = `
+                <div class="server-info">
+                    <h4>服务器详情</h4>
+                    <div class="server-details">
+                        <div class="server-detail">
+                            <div class="server-detail-label">实例名称</div>
+                            <div class="server-detail-value">${server.instanceName || 'N/A'}</div>
+                        </div>
+                        <div class="server-detail">
+                            <div class="server-detail-label">核心类型</div>
+                            <div class="server-detail-value">${server.coreType || 'N/A'}</div>
+                        </div>
+                        <div class="server-detail">
+                            <div class="server-detail-label">版本</div>
+                            <div class="server-detail-value">${server.version || 'N/A'}</div>
+                        </div>
+                        <div class="server-detail">
+                            <div class="server-detail-label">状态</div>
+                            <div class="server-detail-value">${server.status || 'N/A'}</div>
+                        </div>
+                        <div class="server-detail">
+                            <div class="server-detail-label">内存配置</div>
+                            <div class="server-detail-value">${server.memoryMb || 0} MB</div>
+                        </div>
+                        <div class="server-detail">
+                            <div class="server-detail-label">文件路径</div>
+                            <div class="server-detail-value">${server.filePath || 'N/A'}</div>
+                        </div>
+                        <div class="server-detail">
+                            <div class="server-detail-label">创建时间</div>
+                            <div class="server-detail-value">${server.createdAt ? new Date(server.createdAt).toLocaleString('zh-CN') : 'N/A'}</div>
+                        </div>
+                        <div class="server-detail">
+                            <div class="server-detail-label">更新时间</div>
+                            <div class="server-detail-value">${server.updatedAt ? new Date(server.updatedAt).toLocaleString('zh-CN') : 'N/A'}</div>
+                        </div>
+                    </div>
+                </div>
+            `;
+
+        serverInfoCard.style.display = 'block';
+    }
+
+    // 订阅控制台
+    function subscribeConsole() {
+        const serverId = document.getElementById('serverSelect').value;
+        if (!serverId) {
+            showAlert('请选择服务器', 'error');
+            return;
+        }
+
+        if (!stompClient || !stompClient.connected) {
+            showAlert('WebSocket 未连接', 'error');
+            return;
+        }
+
+        currentServerId = serverId;
+
+        // 先获取服务器信息
+        fetch('/api/servers/list', {
+            headers: {
+                'X-Endless-Token': document.getElementById('token').value
+            }
+        })
+            .then(response => response.json())
+            .then(data => {
+                const server = data.servers.find(s => s.id == serverId);
+                if (server) {
+                    displayServerInfo(server);
+                }
+            })
+            .catch(error => console.error('获取服务器信息失败:', error));
+
+        // 订阅控制台输出
+        const subscription = stompClient.subscribe(`/topic/console/${serverId}`, function (message) {
+            const data = JSON.parse(message.body);
+            if (data.line) {
+                addConsoleOutput(data.line);
+            } else if (data.error) {
+                addConsoleOutput(data.error, 'error');
+            } else if (data.message) {
+                addConsoleOutput(data.message, 'info');
+            }
+        });
+
+        isSubscribed = true;
+        updateConsoleStatus('connected', `已订阅服务器 #${serverId}`);
+        addConsoleOutput(`开始监听服务器 ${serverId} 的控制台输出`, 'info');
+
+        // 发送订阅消息
+        stompClient.send('/app/console/subscribe', {}, JSON.stringify({
+            serverId: parseInt(serverId),
+            token: document.getElementById('token').value
+        }));
+    }
+
+    // 取消订阅控制台
+    function unsubscribeConsole() {
+        if (isSubscribed) {
+            isSubscribed = false;
+            currentServerId = null;
+            updateConsoleStatus('disconnected', '未连接');
+            addConsoleOutput('已停止监听控制台输出', 'warning');
+            document.getElementById('serverInfoCard').style.display = 'none';
+        }
+    }
+
+    // 发送命令
+    function sendCommand() {
+        const command = document.getElementById('commandInput').value.trim();
+        if (!command) {
+            showAlert('请输入命令', 'error');
+            return;
+        }
+
+        if (!currentServerId) {
+            showAlert('未订阅控制台', 'error');
+            return;
+        }
+
+        const token = document.getElementById('token').value;
+
+        fetch(`/api/servers/${currentServerId}/command`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Endless-Token': token
+            },
+            body: JSON.stringify({command: command})
+        })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    addConsoleOutput(`> ${command}`, 'success');
+                    document.getElementById('commandInput').value = '';
+                } else {
+                    addConsoleOutput(`命令执行失败: ${data.error}`, 'error');
+                }
+            })
+            .catch(error => {
+                addConsoleOutput(`发送命令失败: ${error.message}`, 'error');
+            });
+    }
+
+    // 清空控制台
+    function clearConsole() {
+        document.getElementById('consoleOutput').textContent = '';
+        addConsoleOutput('控制台已清空', 'info');
+    }
+
+    // 事件监听器
+    document.addEventListener('DOMContentLoaded', function () {
+        // 连接相关
+        document.getElementById('connectBtn').addEventListener('click', connectWebSocket);
+        document.getElementById('disconnectBtn').addEventListener('click', disconnectWebSocket);
+        document.getElementById('loadServersBtn').addEventListener('click', loadServers);
+
+        // 控制台相关
+        document.getElementById('subscribeBtn').addEventListener('click', subscribeConsole);
+        document.getElementById('unsubscribeBtn').addEventListener('click', unsubscribeConsole);
+        document.getElementById('clearConsoleBtn').addEventListener('click', clearConsole);
+
+        // 命令相关
+        document.getElementById('sendCommandBtn').addEventListener('click', sendCommand);
+        document.getElementById('commandInput').addEventListener('keypress', function (e) {
+            if (e.key === 'Enter') {
+                sendCommand();
+            }
+        });
+
+        // 服务器选择变化时显示服务器信息
+        document.getElementById('serverSelect').addEventListener('change', function () {
+            const serverId = this.value;
+            if (!serverId) {
+                document.getElementById('serverInfoCard').style.display = 'none';
+                return;
+            }
+
+            // 如果已订阅，先取消订阅
+            if (isSubscribed) {
+                unsubscribeConsole();
+            }
+        });
+    });
+
+    // 页面卸载时断开连接
+    window.addEventListener('beforeunload', function () {
+        if (stompClient && stompClient.connected) {
+            stompClient.disconnect();
+        }
+    });
+</script>
+</body>
+</html>

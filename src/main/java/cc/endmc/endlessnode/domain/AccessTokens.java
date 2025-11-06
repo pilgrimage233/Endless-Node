@@ -26,6 +26,9 @@ public class AccessTokens implements Serializable {
      */
     @TableField(value = "master_id")
     private Integer masterId;
+
+    @TableField(value = "master_uuid")
+    private String masterUuid;
     /**
      *
      */

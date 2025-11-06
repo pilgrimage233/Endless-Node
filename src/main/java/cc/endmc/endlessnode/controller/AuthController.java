@@ -7,6 +7,7 @@ import cc.endmc.endlessnode.service.MasterNodesService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.Date;
@@ -32,6 +33,7 @@ public class AuthController {
      * @return 注册结果
      */
     @PostMapping("/register")
+    @Transactional
     public ResponseEntity<Map<String, Object>> register(@RequestBody Map<String, String> request) {
         String ipAddress = request.get("ipAddress");
         String version = request.get("version");
@@ -103,9 +105,10 @@ public class AuthController {
             return ResponseEntity.ok(response);
         }
 
+        String newUuid = UUID.randomUUID().toString();
         // 创建新的主控端记录
         MasterNodes newNode = new MasterNodes();
-        newNode.setUuid(UUID.randomUUID().toString());
+        newNode.setUuid(newUuid);
         newNode.setVersion(version != null ? version : "1.0.0");  // 主控端版本
         newNode.setSecretKey(secretKey);
         newNode.setIpAddress(ipAddress);
@@ -114,7 +117,24 @@ public class AuthController {
         newNode.setIsDeleted(0);
         newNode.setProtocolVersion("1.0");
 
-        masterNodesService.save(newNode);
+        final boolean masterSave = masterNodesService.save(newNode);
+
+        final MasterNodes masterNodes = masterNodesService.lambdaQuery()
+                .eq(MasterNodes::getUuid, newUuid)
+                .one();
+
+        // 绑定访问令牌
+        AccessTokens token = accessTokensService.lambdaQuery()
+                .eq(AccessTokens::getToken, secretKey)
+                .one();
+
+        token.setMasterUuid(masterNodes.getUuid());
+        token.setMasterId(masterNodes.getId());
+        final boolean tokenSave = accessTokensService.saveOrUpdate(token);
+
+        if (!masterSave || !tokenSave) {
+            return ResponseEntity.status(500).body(Map.of("error", "节点注册失败"));
+        }
 
         Map<String, Object> response = new HashMap<>();
         response.put("success", true);
