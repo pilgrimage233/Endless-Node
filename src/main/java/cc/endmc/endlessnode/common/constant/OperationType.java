@@ -1,4 +1,4 @@
-package cc.endmc.endlessnode.common;
+package cc.endmc.endlessnode.common.constant;
 
 /**
  * ClassName: OperationType <br>
