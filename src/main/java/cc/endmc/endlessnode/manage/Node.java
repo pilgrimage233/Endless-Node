@@ -27,6 +27,9 @@ public class Node {
     // 存储服务器控制台输出线程
     private static final Map<Integer, Thread> CONSOLE_THREADS = new ConcurrentHashMap<>();
 
+    // 存储服务器启动时间（用于计算运行时长）
+    private static final Map<Integer, Long> SERVER_START_TIMES = new ConcurrentHashMap<>();
+
     // 存储活跃的WebSocket会话
     private static final Map<String, Set<String>> ACTIVE_SESSIONS = new ConcurrentHashMap<>();
 
@@ -43,6 +46,10 @@ public class Node {
 
     public static Map<Integer, Thread> getConsoleThreads() {
         return CONSOLE_THREADS;
+    }
+
+    public static Map<Integer, Long> getServerStartTimes() {
+        return SERVER_START_TIMES;
     }
 
     public static Map<String, Set<String>> getActiveSessions() {

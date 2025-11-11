@@ -44,9 +44,13 @@ public class ServerController {
     private static final String DEFAULT_JVM_ARGS = "-XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=200";
     private static final long RESTART_WAIT_TIME_MS = 5000;
     private static final long FORCE_KILL_TIMEOUT_SECONDS = 10;
+    private static final int MAX_CONSOLE_LOG_LINES = 500; // 每个服务器最多缓存500条日志
 
     // 用于同步服务器操作的锁对象
     private static final Map<Integer, Object> SERVER_LOCKS = new HashMap<>();
+
+    // 控制台日志缓存：服务器ID -> 日志列表
+    private static final Map<Integer, List<String>> CONSOLE_LOG_CACHE = new HashMap<>();
 
     /**
      * 获取服务器操作锁
@@ -119,6 +123,7 @@ public class ServerController {
 
                 // 清理资源
                 Node.getRunningServers().remove(serverId);
+                Node.getServerStartTimes().remove(serverId);
                 OutputStreamWriter writer = Node.getServerWriters().remove(serverId);
                 closeWriter(writer);
 
@@ -145,6 +150,7 @@ public class ServerController {
                     if (process != null && process.isAlive()) {
                         process.destroyForcibly();
                     }
+                    Node.getServerStartTimes().remove(serverId);
                     OutputStreamWriter writer = Node.getServerWriters().remove(serverId);
                     closeWriter(writer);
                 } catch (Exception cleanupEx) {
@@ -396,6 +402,12 @@ public class ServerController {
 
             Process process = null;
             try {
+                // 如果主控端提供了启动脚本，提取并更新JVM参数
+                if (startScript != null && startScript.containsKey("script") &&
+                        startScript.get("script") != null && !startScript.get("script").trim().isEmpty()) {
+                    updateServerJvmArgsFromScript(server, startScript.get("script"));
+                }
+
                 // 启动服务器
                 if (startScript != null && startScript.containsKey("script") &&
                         startScript.get("script") != null && !startScript.get("script").trim().isEmpty()) {
@@ -412,6 +424,9 @@ public class ServerController {
                 }
 
                 Node.getRunningServers().put(serverId, process);
+
+                // 记录启动时间
+                Node.getServerStartTimes().put(serverId, System.currentTimeMillis());
 
                 // 启动控制台输出线程
                 startConsoleOutputThread(serverId, process);
@@ -442,6 +457,7 @@ public class ServerController {
                     }
                 }
                 Node.getRunningServers().remove(serverId);
+                Node.getServerStartTimes().remove(serverId);
                 stopConsoleOutputThread(serverId);
 
                 // 记录操作日志
@@ -521,6 +537,7 @@ public class ServerController {
 
                 // 清理资源
                 Node.getRunningServers().remove(serverId);
+                Node.getServerStartTimes().remove(serverId);
                 OutputStreamWriter writer = Node.getServerWriters().remove(serverId);
                 closeWriter(writer);
 
@@ -619,6 +636,7 @@ public class ServerController {
 
                 // 清理资源
                 Node.getRunningServers().remove(serverId);
+                Node.getServerStartTimes().remove(serverId);
                 OutputStreamWriter writer = Node.getServerWriters().remove(serverId);
                 closeWriter(writer);
 
@@ -628,6 +646,12 @@ public class ServerController {
                 } catch (InterruptedException ie) {
                     Thread.currentThread().interrupt();
                     log.warn("服务器重启等待被中断: {}", serverId);
+                }
+
+                // 如果主控端提供了启动脚本，提取并更新JVM参数
+                if (scripts != null && scripts.containsKey("startScript") &&
+                        scripts.get("startScript") != null && !scripts.get("startScript").trim().isEmpty()) {
+                    updateServerJvmArgsFromScript(server, scripts.get("startScript"));
                 }
 
                 // 启动服务器
@@ -646,6 +670,9 @@ public class ServerController {
                 }
 
                 Node.getRunningServers().put(serverId, newProcess);
+
+                // 记录启动时间
+                Node.getServerStartTimes().put(serverId, System.currentTimeMillis());
 
                 // 启动控制台输出线程
                 startConsoleOutputThread(serverId, newProcess);
@@ -676,6 +703,7 @@ public class ServerController {
                     }
                 }
                 Node.getRunningServers().remove(serverId);
+                Node.getServerStartTimes().remove(serverId);
                 stopConsoleOutputThread(serverId);
 
                 // 更新服务器状态为已停止
@@ -758,6 +786,7 @@ public class ServerController {
 
                 // 清理资源
                 Node.getRunningServers().remove(serverId);
+                Node.getServerStartTimes().remove(serverId);
                 OutputStreamWriter writer = Node.getServerWriters().remove(serverId);
                 closeWriter(writer);
 
@@ -836,6 +865,9 @@ public class ServerController {
                 synchronized (SERVER_LOCKS) {
                     SERVER_LOCKS.remove(serverId);
                 }
+
+                // 清理日志缓存
+                clearLogCache(serverId);
 
                 // 记录操作日志
                 logOperation(accessToken.getMasterId(), OperationType.DELETE_SERVER, true,
@@ -927,6 +959,58 @@ public class ServerController {
         } finally {
             // 注意：不要关闭 reader，因为进程还在运行
             // 控制台输出线程会持续读取
+        }
+    }
+
+    /**
+     * 获取服务器控制台历史日志
+     *
+     * @param token    访问令牌
+     * @param serverId 服务器实例ID
+     * @return 历史日志列表
+     */
+    @GetMapping("/{serverId}/console/history")
+    public ResponseEntity<Map<String, Object>> getConsoleHistory(
+            @RequestHeader(Node.Header.X_ENDLESS_TOKEN) String token,
+            @PathVariable Integer serverId) {
+
+        // 验证令牌
+        AccessTokens accessToken = validateToken(token);
+        if (accessToken == null) {
+            return ResponseEntity.status(401).body(Map.of("error", "无效的访问令牌"));
+        }
+
+        // 验证 serverId
+        if (serverId == null || serverId <= 0) {
+            return ResponseEntity.badRequest().body(Map.of("error", "无效的服务器ID"));
+        }
+
+        // 获取服务器实例
+        ServerInstances server = serverInstancesService.getById(serverId);
+        if (server == null) {
+            return ResponseEntity.notFound().build();
+        }
+
+        // 检查权限
+        if (!hasServerPermission(server, accessToken)) {
+            return ResponseEntity.status(403).body(Map.of("error", "权限不足"));
+        }
+
+        try {
+            // 获取历史日志缓存
+            List<String> logHistory = getLogCache(serverId);
+
+            Map<String, Object> response = new HashMap<>();
+            response.put("success", true);
+            response.put("serverId", serverId);
+            response.put("logs", logHistory);
+            response.put("count", logHistory.size());
+            response.put("maxLines", MAX_CONSOLE_LOG_LINES);
+
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            log.error("获取服务器控制台历史日志时发生错误: {}", serverId, e);
+            return ResponseEntity.status(500).body(Map.of("error", "获取历史日志失败: " + e.getMessage()));
         }
     }
 
@@ -1097,6 +1181,61 @@ public class ServerController {
     }
 
     /**
+     * 添加日志到缓存
+     *
+     * @param serverId 服务器ID
+     * @param logLine  日志行
+     */
+    private void addLogToCache(Integer serverId, String logLine) {
+        if (serverId == null || logLine == null) {
+            return;
+        }
+
+        synchronized (CONSOLE_LOG_CACHE) {
+            List<String> logCache = CONSOLE_LOG_CACHE.computeIfAbsent(serverId, k -> new ArrayList<>());
+            logCache.add(logLine);
+
+            // 限制缓存大小，保留最新的日志
+            if (logCache.size() > MAX_CONSOLE_LOG_LINES) {
+                // 移除最旧的日志（保留最新的MAX_CONSOLE_LOG_LINES条）
+                int removeCount = logCache.size() - MAX_CONSOLE_LOG_LINES;
+                logCache.subList(0, removeCount).clear();
+            }
+        }
+    }
+
+    /**
+     * 获取服务器控制台日志缓存
+     *
+     * @param serverId 服务器ID
+     * @return 日志列表
+     */
+    private List<String> getLogCache(Integer serverId) {
+        if (serverId == null) {
+            return new ArrayList<>();
+        }
+
+        synchronized (CONSOLE_LOG_CACHE) {
+            return new ArrayList<>(CONSOLE_LOG_CACHE.getOrDefault(serverId, new ArrayList<>()));
+        }
+    }
+
+    /**
+     * 清空服务器控制台日志缓存
+     *
+     * @param serverId 服务器ID
+     */
+    private void clearLogCache(Integer serverId) {
+        if (serverId == null) {
+            return;
+        }
+
+        synchronized (CONSOLE_LOG_CACHE) {
+            CONSOLE_LOG_CACHE.remove(serverId);
+        }
+    }
+
+    /**
      * 启动控制台输出线程
      *
      * @param serverId 服务器ID
@@ -1124,6 +1263,9 @@ public class ServerController {
                 reader = new BufferedReader(new InputStreamReader(inputStream, StandardCharsets.UTF_8));
                 String line;
                 while (!Thread.currentThread().isInterrupted() && (line = reader.readLine()) != null) {
+                    // 添加到日志缓存
+                    addLogToCache(serverId, line);
+
                     // 发送控制台输出到WebSocket
                     final String finalLine = line;
                     try {
@@ -1143,9 +1285,11 @@ public class ServerController {
 
                 // 否则，记录错误
                 log.error("读取服务器控制台输出时发生错误: {}", serverId, e);
+                String errorMsg = "读取控制台失败: " + e.getMessage();
+                addLogToCache(serverId, "[ERROR] " + errorMsg);
                 try {
                     messagingTemplate.convertAndSend(TOPIC_CONSOLE + serverId,
-                            Map.of("error", "读取控制台失败: " + e.getMessage()));
+                            Map.of("error", errorMsg));
                 } catch (Exception sendEx) {
                     log.error("向WebSocket发送错误消息时发生错误", sendEx);
                 }
@@ -1454,6 +1598,98 @@ public class ServerController {
     }
 
     /**
+     * 从启动脚本中提取并更新服务器的JVM参数
+     *
+     * @param server 服务器实例
+     * @param script 启动脚本
+     */
+    private void updateServerJvmArgsFromScript(ServerInstances server, String script) {
+        if (server == null || script == null || script.trim().isEmpty()) {
+            return;
+        }
+
+        try {
+            boolean needsUpdate = false;
+
+            // 提取 -Xmx 参数
+            java.util.regex.Pattern xmxPattern = java.util.regex.Pattern.compile("-Xmx(\\d+)([MmGgKk]?)");
+            java.util.regex.Matcher xmxMatcher = xmxPattern.matcher(script);
+            if (xmxMatcher.find()) {
+                String value = xmxMatcher.group(1);
+                String unit = xmxMatcher.group(2).toUpperCase();
+
+                int memoryMb = Integer.parseInt(value);
+                // 转换为MB
+                if ("G".equals(unit)) {
+                    memoryMb *= 1024;
+                } else if ("K".equals(unit)) {
+                    memoryMb /= 1024;
+                }
+
+                // 更新内存配置
+                if (server.getMemoryMb() == null || !server.getMemoryMb().equals(memoryMb)) {
+                    server.setMemoryMb(memoryMb);
+                    needsUpdate = true;
+                    log.info("从启动脚本更新服务器 {} 的内存配置: {}MB", server.getId(), memoryMb);
+                }
+            }
+
+            // 提取所有JVM参数（排除 -Xms 和 -Xmx）
+            StringBuilder jvmArgsBuilder = new StringBuilder();
+            String[] parts = script.trim().split("\\s+");
+            boolean foundJar = false;
+
+            for (String part : parts) {
+                // 跳过 java 命令本身
+                if ("java".equalsIgnoreCase(part)) {
+                    continue;
+                }
+
+                // 遇到 -jar 后停止收集JVM参数
+                if ("-jar".equalsIgnoreCase(part)) {
+                    foundJar = true;
+                    break;
+                }
+
+                // 跳过 -Xms 和 -Xmx 参数（这些已经单独处理）
+                if (part.startsWith("-Xms") || part.startsWith("-Xmx")) {
+                    continue;
+                }
+
+                // 收集其他JVM参数
+                if (part.startsWith("-")) {
+                    if (jvmArgsBuilder.length() > 0) {
+                        jvmArgsBuilder.append(" ");
+                    }
+                    jvmArgsBuilder.append(part);
+                }
+            }
+
+            String extractedJvmArgs = jvmArgsBuilder.toString().trim();
+            if (!extractedJvmArgs.isEmpty()) {
+                // 只有当提取到的参数与当前不同时才更新
+                String currentJvmArgs = server.getJvmArgs();
+                if (currentJvmArgs == null || !currentJvmArgs.equals(extractedJvmArgs)) {
+                    server.setJvmArgs(extractedJvmArgs);
+                    needsUpdate = true;
+                    log.info("从启动脚本更新服务器 {} 的JVM参数: {}", server.getId(), extractedJvmArgs);
+                }
+            }
+
+            // 如果有更新，保存到数据库
+            if (needsUpdate) {
+                server.setUpdatedAt(new Date());
+                serverInstancesService.updateById(server);
+                log.info("服务器 {} 的配置已更新到数据库", server.getId());
+            }
+
+        } catch (Exception e) {
+            log.warn("从启动脚本提取JVM参数时发生错误: {}", e.getMessage());
+            // 不抛出异常，继续启动流程
+        }
+    }
+
+    /**
      * 记录操作日志
      *
      * @param masterId      主控端ID
@@ -1495,6 +1731,384 @@ public class ServerController {
             });
         } catch (Exception e) {
             log.error("调度操作日志任务失败", e);
+        }
+    }
+
+    /**
+     * 获取服务器运行状态
+     *
+     * @param token    访问令牌
+     * @param serverId 服务器实例ID
+     * @return 服务器状态信息
+     */
+    @GetMapping("/{serverId}/status")
+    public ResponseEntity<Map<String, Object>> getServerStatus(
+            @RequestHeader(Node.Header.X_ENDLESS_TOKEN) String token,
+            @PathVariable Integer serverId) {
+        // 验证令牌
+        AccessTokens accessToken = validateToken(token);
+        if (accessToken == null) {
+            return ResponseEntity.status(401).body(Map.of("error", "无效的访问令牌"));
+        }
+
+        // 验证 serverId
+        if (serverId == null || serverId <= 0) {
+            return ResponseEntity.badRequest().body(Map.of("error", "无效的服务器ID"));
+        }
+
+        // 获取服务器实例
+        ServerInstances server = serverInstancesService.getById(serverId);
+        if (server == null) {
+            return ResponseEntity.notFound().build();
+        }
+
+        // 检查权限
+        if (!hasServerPermission(server, accessToken)) {
+            return ResponseEntity.status(403).body(Map.of("error", "权限不足"));
+        }
+
+        try {
+            // 检查服务器是否正在运行
+            Process process = Node.getRunningServers().get(serverId);
+            boolean isRunning = process != null && process.isAlive();
+
+            // 构建响应数据
+            Map<String, Object> response = new HashMap<>();
+            response.put("success", true);
+            response.put("serverId", serverId);
+            response.put("instanceName", server.getInstanceName());
+            response.put("status", server.getStatus());
+            response.put("isRunning", isRunning);
+
+            // 服务器配置信息
+            Map<String, Object> config = new HashMap<>();
+            config.put("version", server.getVersion());
+            config.put("coreType", server.getCoreType());
+            config.put("port", server.getPort());
+            config.put("memoryMb", server.getMemoryMb());
+            config.put("jvmArgs", server.getJvmArgs());
+            config.put("filePath", server.getFilePath());
+            response.put("config", config);
+
+            // 运行时长信息（仅记录单次运行时间）
+            Map<String, Object> runtime = new HashMap<>();
+
+            // 如果服务器正在运行，添加当前运行时长
+            if (isRunning) {
+                Long startTime = Node.getServerStartTimes().get(serverId);
+                if (startTime != null) {
+                    long currentTime = System.currentTimeMillis();
+                    long currentRuntimeSeconds = (currentTime - startTime) / 1000;
+                    runtime.put("runtimeSeconds", currentRuntimeSeconds);
+                    runtime.put("runtimeFormatted", formatRuntime(currentRuntimeSeconds));
+                    runtime.put("startTime", new Date(startTime));
+                }
+            } else {
+                // 服务器未运行，没有运行时长
+                runtime.put("runtimeSeconds", 0);
+                runtime.put("runtimeFormatted", "0秒");
+            }
+
+            // 进程信息
+            if (isRunning && process != null) {
+                Map<String, Object> processInfo = getProcessInfo(process);
+                response.put("processInfo", processInfo);
+            }
+
+            response.put("runtime", runtime);
+
+            // 时间信息
+            Map<String, Object> timestamps = new HashMap<>();
+            if (server.getCreatedAt() != null) {
+                timestamps.put("createdAt", server.getCreatedAt());
+            }
+            if (server.getUpdatedAt() != null) {
+                timestamps.put("updatedAt", server.getUpdatedAt());
+            }
+            response.put("timestamps", timestamps);
+
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            log.error("获取服务器状态时发生错误: {}", serverId, e);
+            return ResponseEntity.status(500).body(Map.of("error", "获取服务器状态失败: " + e.getMessage()));
+        }
+    }
+
+    /**
+     * 格式化运行时长（秒）为可读格式
+     *
+     * @param seconds 运行时长（秒）
+     * @return 格式化后的字符串，如 "1天 2小时 30分钟 45秒"
+     */
+    private String formatRuntime(long seconds) {
+        if (seconds < 0) {
+            return "0秒";
+        }
+
+        long days = seconds / 86400;
+        long hours = (seconds % 86400) / 3600;
+        long minutes = (seconds % 3600) / 60;
+        long secs = seconds % 60;
+
+        StringBuilder sb = new StringBuilder();
+        if (days > 0) {
+            sb.append(days).append("天 ");
+        }
+        if (hours > 0) {
+            sb.append(hours).append("小时 ");
+        }
+        if (minutes > 0) {
+            sb.append(minutes).append("分钟 ");
+        }
+        if (secs > 0 || sb.length() == 0) {
+            sb.append(secs).append("秒");
+        }
+
+        return sb.toString().trim();
+    }
+
+    /**
+     * 获取进程详细信息
+     *
+     * @param process 进程对象
+     * @return 进程信息Map
+     */
+    private Map<String, Object> getProcessInfo(Process process) {
+        Map<String, Object> processInfo = new HashMap<>();
+
+        try {
+            // 基本进程信息
+            processInfo.put("alive", process.isAlive());
+
+            // 获取进程ID
+            try {
+                long pid = process.pid();
+                processInfo.put("pid", pid);
+
+                // 尝试获取更详细的进程信息
+                try {
+                    Optional<ProcessHandle> processHandleOpt = ProcessHandle.of(pid);
+                    if (processHandleOpt.isPresent()) {
+                        ProcessHandle processHandle = processHandleOpt.get();
+                        ProcessHandle.Info info = processHandle.info();
+
+                        // 命令和参数
+                        info.command().ifPresent(cmd -> processInfo.put("command", cmd));
+                        info.arguments().ifPresent(args -> processInfo.put("arguments", Arrays.asList(args)));
+
+                        // 启动时间
+                        info.startInstant().ifPresent(start ->
+                                processInfo.put("startInstant", start.toString()));
+
+                        // CPU 时间
+                        info.totalCpuDuration().ifPresent(cpu -> {
+                            processInfo.put("totalCpuDurationSeconds", cpu.getSeconds());
+                            processInfo.put("totalCpuDurationNanos", cpu.getNano());
+                        });
+
+                        // 用户信息
+                        info.user().ifPresent(user -> processInfo.put("user", user));
+                    }
+                } catch (Exception e) {
+                    log.debug("无法获取 ProcessHandle 信息: {}", e.getMessage());
+                }
+
+                // 获取内存和CPU使用情况（通过系统命令）
+                Map<String, Object> resourceUsage = getProcessResourceUsage(pid);
+                if (!resourceUsage.isEmpty()) {
+                    processInfo.put("resourceUsage", resourceUsage);
+                }
+
+            } catch (UnsupportedOperationException e) {
+                processInfo.put("pid", null);
+                log.debug("平台不支持获取 PID");
+            }
+
+        } catch (Exception e) {
+            log.error("获取进程信息时发生错误", e);
+            processInfo.put("error", "无法获取进程详细信息: " + e.getMessage());
+        }
+
+        return processInfo;
+    }
+
+    /**
+     * 获取进程资源使用情况（内存、CPU）
+     *
+     * @param pid 进程ID
+     * @return 资源使用情况Map
+     */
+    private Map<String, Object> getProcessResourceUsage(long pid) {
+        Map<String, Object> resourceUsage = new HashMap<>();
+        String osName = System.getProperty("os.name", "").toLowerCase();
+
+        try {
+            if (osName.contains("win")) {
+                // Windows 系统
+                getWindowsProcessInfo(pid, resourceUsage);
+            } else if (osName.contains("linux") || osName.contains("unix") || osName.contains("mac")) {
+                // Linux/Unix/macOS 系统
+                getUnixProcessInfo(pid, resourceUsage);
+            }
+        } catch (Exception e) {
+            log.debug("获取进程资源使用情况失败: {}", e.getMessage());
+        }
+
+        return resourceUsage;
+    }
+
+    /**
+     * 获取 Windows 系统进程信息
+     */
+    private void getWindowsProcessInfo(long pid, Map<String, Object> resourceUsage) {
+        try {
+            // 使用 wmic 命令获取进程信息
+            ProcessBuilder pb = new ProcessBuilder("wmic", "process", "where", "ProcessId=" + pid,
+                    "get", "WorkingSetSize,PageFileUsage", "/format:csv");
+            Process proc = pb.start();
+
+            try (BufferedReader reader = new BufferedReader(
+                    new InputStreamReader(proc.getInputStream(), StandardCharsets.UTF_8))) {
+                String line;
+                boolean firstLine = true;
+                while ((line = reader.readLine()) != null) {
+                    if (firstLine || line.trim().isEmpty()) {
+                        firstLine = false;
+                        continue;
+                    }
+
+                    String[] parts = line.split(",");
+                    if (parts.length >= 3) {
+                        try {
+                            // WorkingSetSize (内存使用，字节)
+                            String memoryStr = parts[parts.length - 2].trim();
+                            if (!memoryStr.isEmpty() && !memoryStr.equals("WorkingSetSize")) {
+                                long memoryBytes = Long.parseLong(memoryStr);
+                                resourceUsage.put("memoryBytes", memoryBytes);
+                                resourceUsage.put("memoryMB", memoryBytes / (1024.0 * 1024.0));
+                            }
+
+                            // PageFileUsage (虚拟内存，字节)
+                            String pageFileStr = parts[parts.length - 1].trim();
+                            if (!pageFileStr.isEmpty() && !pageFileStr.equals("PageFileUsage")) {
+                                long pageFileBytes = Long.parseLong(pageFileStr);
+                                resourceUsage.put("virtualMemoryBytes", pageFileBytes);
+                                resourceUsage.put("virtualMemoryMB", pageFileBytes / (1024.0 * 1024.0));
+                            }
+                        } catch (NumberFormatException e) {
+                            // 忽略解析错误
+                        }
+                    }
+                }
+            }
+
+            proc.waitFor(1, TimeUnit.SECONDS);
+
+            // 使用 PowerShell 获取 CPU 使用率
+            try {
+                // 使用更简单的 PowerShell 命令获取 CPU 使用率
+                String psCommand = String.format(
+                        "$proc = Get-Process -Id %d -ErrorAction SilentlyContinue; " +
+                                "if ($proc) { $cpu = (Get-Counter \"\\Process($($proc.ProcessName))\\%% Processor Time\").CounterSamples.CookedValue; $cpu }",
+                        pid);
+
+                ProcessBuilder cpuPb = new ProcessBuilder("powershell", "-Command", psCommand);
+                Process cpuProc = cpuPb.start();
+
+                try (BufferedReader cpuReader = new BufferedReader(
+                        new InputStreamReader(cpuProc.getInputStream(), StandardCharsets.UTF_8))) {
+                    String cpuLine = cpuReader.readLine();
+                    if (cpuLine != null && !cpuLine.trim().isEmpty()) {
+                        try {
+                            double cpuPercent = Double.parseDouble(cpuLine.trim());
+                            // PowerShell 返回的值可能需要除以 CPU 核心数，但通常已经是百分比
+                            resourceUsage.put("cpuPercent", cpuPercent);
+                        } catch (NumberFormatException e) {
+                            log.debug("解析CPU使用率失败: {}", cpuLine);
+                        }
+                    }
+                }
+
+                // 读取错误流（PowerShell 可能将输出发送到错误流）
+                try (BufferedReader errorReader = new BufferedReader(
+                        new InputStreamReader(cpuProc.getErrorStream(), StandardCharsets.UTF_8))) {
+                    String errorLine = errorReader.readLine();
+                    if (errorLine != null && !errorLine.trim().isEmpty() && !errorLine.contains("Error")) {
+                        try {
+                            double cpuPercent = Double.parseDouble(errorLine.trim());
+                            resourceUsage.put("cpuPercent", cpuPercent);
+                        } catch (NumberFormatException e) {
+                            // 忽略
+                        }
+                    }
+                }
+
+                cpuProc.waitFor(2, TimeUnit.SECONDS);
+            } catch (Exception e) {
+                log.debug("使用 PowerShell 获取 CPU 使用率失败: {}", e.getMessage());
+            }
+        } catch (Exception e) {
+            log.debug("Windows 进程信息获取失败: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * 获取 Unix/Linux/macOS 系统进程信息
+     */
+    private void getUnixProcessInfo(long pid, Map<String, Object> resourceUsage) {
+        try {
+            // 使用 ps 命令获取进程信息
+            ProcessBuilder pb = new ProcessBuilder("ps", "-p", String.valueOf(pid), "-o",
+                    "rss=,vsz=,%cpu=,etime=");
+            Process proc = pb.start();
+
+            try (BufferedReader reader = new BufferedReader(
+                    new InputStreamReader(proc.getInputStream(), StandardCharsets.UTF_8))) {
+                String line;
+                boolean firstLine = true;
+                while ((line = reader.readLine()) != null) {
+                    if (firstLine) {
+                        firstLine = false;
+                        continue; // 跳过标题行
+                    }
+
+                    line = line.trim();
+                    if (line.isEmpty()) continue;
+
+                    // 解析 ps 输出: RSS VSZ %CPU ELAPSED
+                    String[] parts = line.split("\\s+");
+                    if (parts.length >= 3) {
+                        try {
+                            // RSS: 物理内存使用 (KB)
+                            long rssKB = Long.parseLong(parts[0]);
+                            resourceUsage.put("memoryKB", rssKB);
+                            resourceUsage.put("memoryMB", rssKB / 1024.0);
+                            resourceUsage.put("memoryBytes", rssKB * 1024);
+
+                            // VSZ: 虚拟内存使用 (KB)
+                            long vszKB = Long.parseLong(parts[1]);
+                            resourceUsage.put("virtualMemoryKB", vszKB);
+                            resourceUsage.put("virtualMemoryMB", vszKB / 1024.0);
+                            resourceUsage.put("virtualMemoryBytes", vszKB * 1024);
+
+                            // %CPU: CPU 使用率
+                            double cpuPercent = Double.parseDouble(parts[2]);
+                            resourceUsage.put("cpuPercent", cpuPercent);
+
+                            // ELAPSED: 运行时间
+                            if (parts.length >= 4) {
+                                resourceUsage.put("elapsedTime", parts[3]);
+                            }
+                        } catch (NumberFormatException e) {
+                            // 忽略解析错误
+                        }
+                    }
+                }
+            }
+
+            proc.waitFor(1, TimeUnit.SECONDS);
+        } catch (Exception e) {
+            log.debug("Unix 进程信息获取失败: {}", e.getMessage());
         }
     }
 }
