@@ -56,12 +56,13 @@ CREATE INDEX IF NOT EXISTS idx_instance_status ON server_instances (status, core
 -- 访问令牌表
 CREATE TABLE IF NOT EXISTS access_tokens
 (
-    token      TEXT PRIMARY KEY,  -- JWT令牌
-    master_id  INTEGER  NOT NULL, -- 关联 master_nodes.id
-    expires_at DATETIME NOT NULL, -- 过期时间
-    scope      TEXT     NOT NULL, -- 权限范围 (SERVER_CONTROL/FILE_MANAGE)
-    remark     TEXT,              -- 备注信息
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    token       TEXT PRIMARY KEY,  -- JWT令牌
+    master_id   INTEGER,           -- 关联 master_nodes.id
+    master_uuid TEXT,              -- 关联 master_nodes.uuid
+    expires_at  DATETIME NOT NULL, -- 过期时间
+    scope       TEXT     NOT NULL, -- 权限范围 (SERVER_CONTROL/FILE_MANAGE)
+    remark      TEXT,              -- 备注信息
+    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
 
     FOREIGN KEY (master_id) REFERENCES master_nodes (id)
 );
@@ -77,14 +78,14 @@ CREATE TABLE IF NOT EXISTS node_metadata
 -- 用户表
 CREATE TABLE IF NOT EXISTS users
 (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    username   TEXT    NOT NULL UNIQUE, -- 用户名
-    password   TEXT    NOT NULL,        -- 密码（实际项目中应该加密）
-    role       TEXT    NOT NULL,        -- 用户角色 (ADMIN/USER)
-    enabled    INTEGER  DEFAULT 1,       -- 是否启用 (0:禁用, 1:启用)
-    first_login INTEGER DEFAULT 1,      -- 是否首次登录 (0:否, 1:是)
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    last_login DATETIME                 -- 最后登录时间
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    username    TEXT NOT NULL UNIQUE, -- 用户名
+    password    TEXT NOT NULL,        -- 密码（实际项目中应该加密）
+    role        TEXT NOT NULL,        -- 用户角色 (ADMIN/USER)
+    enabled     INTEGER  DEFAULT 1,   -- 是否启用 (0:禁用, 1:启用)
+    first_login INTEGER  DEFAULT 1,   -- 是否首次登录 (0:否, 1:是)
+    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+    last_login  DATETIME              -- 最后登录时间
 );
 
 CREATE INDEX IF NOT EXISTS idx_users_username ON users (username);
