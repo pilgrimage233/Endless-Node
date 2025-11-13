@@ -3,7 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Endless Node - Token 管理</title>
+    <title id="page-title">加载中...</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
     <style>
         * {
             margin: 0;
@@ -11,366 +12,424 @@
             box-sizing: border-box;
         }
 
+        :root {
+            --bg-light: #f5f5f7;
+            --bg-dark: #1d1d1f;
+            --card-light: rgba(255, 255, 255, 0.7);
+            --card-dark: rgba(30, 30, 30, 0.7);
+            --text-light: #1d1d1f;
+            --text-dark: #f5f5f7;
+            --accent: #0071e3;
+            --accent-hover: #0077ed;
+            --shadow-light: rgba(0, 0, 0, 0.1);
+            --shadow-dark: rgba(0, 0, 0, 0.3);
+        }
+
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', 'Helvetica Neue', Arial, sans-serif;
+            background: var(--bg-light);
+            color: var(--text-light);
             min-height: 100vh;
-            color: #333;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            transition: background 0.3s ease, color 0.3s ease;
+            overflow-x: hidden;
+        }
+
+        body.dark {
+            background: var(--bg-dark);
+            color: var(--text-dark);
+        }
+
+        body::before {
+            content: '';
+            position: fixed;
+            top: -50%;
+            left: -50%;
+            width: 200%;
+            height: 200%;
+            background: radial-gradient(circle at 30% 50%, rgba(0, 113, 227, 0.1) 0%, transparent 50%),
+            radial-gradient(circle at 70% 50%, rgba(175, 82, 222, 0.1) 0%, transparent 50%);
+            animation: float 20s ease-in-out infinite;
+            z-index: 0;
+        }
+
+        @keyframes float {
+            0%, 100% {
+                transform: translate(0, 0) rotate(0deg);
+            }
+            33% {
+                transform: translate(30px, -30px) rotate(120deg);
+            }
+            66% {
+                transform: translate(-20px, 20px) rotate(240deg);
+            }
         }
 
         .container {
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 20px;
+            position: relative;
+            max-width: 750px;
+            width: 100%;
+            background: var(--card-light);
+            backdrop-filter: blur(40px) saturate(180%);
+            -webkit-backdrop-filter: blur(40px) saturate(180%);
+            border-radius: 24px;
+            padding: 48px 40px;
+            box-shadow: 0 20px 60px var(--shadow-light);
+            border: 1px solid rgba(255, 255, 255, 0.5);
+            z-index: 1;
+            animation: slideUp 0.8s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        body.dark .container {
+            background: var(--card-dark);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            box-shadow: 0 20px 60px var(--shadow-dark);
+        }
+
+        @keyframes slideUp {
+            from {
+                opacity: 0;
+                transform: translateY(30px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
         }
 
         .header {
-            text-align: center;
-            margin-bottom: 40px;
-            color: white;
-        }
-
-        .header h1 {
-            font-size: 2.5rem;
-            margin-bottom: 10px;
-            text-shadow: 0 2px 4px rgba(0,0,0,0.3);
-        }
-
-        .header p {
-            font-size: 1.1rem;
-            opacity: 0.9;
-        }
-
-        .card {
-            background: white;
-            border-radius: 12px;
-            box-shadow: 0 8px 32px rgba(0,0,0,0.1);
-            padding: 30px;
-            margin-bottom: 30px;
-        }
-
-        .card h2 {
-            color: #2d3748;
-            margin-bottom: 20px;
-            font-size: 1.5rem;
-        }
-
-        .form-group {
-            margin-bottom: 20px;
-        }
-
-        .form-group label {
-            display: block;
-            margin-bottom: 8px;
-            font-weight: 600;
-            color: #4a5568;
-        }
-
-        .form-group input,
-        .form-group select {
-            width: 100%;
-            padding: 12px 16px;
-            border: 2px solid #e2e8f0;
-            border-radius: 8px;
-            font-size: 16px;
-            transition: border-color 0.3s ease;
-        }
-
-        .form-group input:focus,
-        .form-group select:focus {
-            outline: none;
-            border-color: #667eea;
-            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
-        }
-
-        .btn {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            border: none;
-            padding: 12px 24px;
-            border-radius: 8px;
-            font-size: 16px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: transform 0.2s ease, box-shadow 0.2s ease;
-            margin-right: 10px;
-            margin-bottom: 10px;
-        }
-
-        .btn:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
-        }
-
-        .btn-danger {
-            background: linear-gradient(135deg, #f56565 0%, #e53e3e 100%);
-        }
-
-        .btn-danger:hover {
-            box-shadow: 0 4px 12px rgba(245, 101, 101, 0.4);
-        }
-
-        .btn-success {
-            background: linear-gradient(135deg, #48bb78 0%, #38a169 100%);
-        }
-
-        .btn-success:hover {
-            box-shadow: 0 4px 12px rgba(72, 187, 120, 0.4);
-        }
-
-        .token-list {
-            margin-top: 20px;
-        }
-
-        .token-item {
-            background: #f7fafc;
-            border: 1px solid #e2e8f0;
-            border-radius: 8px;
-            padding: 20px;
-            margin-bottom: 15px;
-            transition: all 0.3s ease;
-        }
-
-        .token-item:hover {
-            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-            transform: translateY(-2px);
-        }
-
-        .token-header {
             display: flex;
-            justify-content: space-between;
             align-items: center;
-            margin-bottom: 15px;
+            justify-content: space-between;
+            margin-bottom: 40px;
         }
 
-        .token-value {
-            font-family: 'Courier New', monospace;
-            background: #2d3748;
-            color: #68d391;
-            padding: 8px 12px;
-            border-radius: 4px;
-            font-size: 14px;
-            word-break: break-all;
-            margin-bottom: 10px;
-        }
-
-        .token-info {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 15px;
-            margin-bottom: 15px;
-        }
-
-        .info-item {
+        .theme-toggle {
+            width: 44px;
+            height: 44px;
+            border-radius: 50%;
+            border: none;
+            background: rgba(0, 0, 0, 0.04);
+            cursor: pointer;
             display: flex;
-            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s ease;
+            position: relative;
+            overflow: hidden;
         }
 
-        .info-label {
-            font-size: 12px;
-            color: #718096;
-            margin-bottom: 4px;
-            text-transform: uppercase;
-            font-weight: 600;
+        body.dark .theme-toggle {
+            background: rgba(255, 255, 255, 0.1);
         }
 
-        .info-value {
-            font-size: 14px;
-            color: #2d3748;
+        .theme-toggle:hover {
+            background: rgba(0, 0, 0, 0.08);
+            transform: scale(1.05);
         }
 
-        .status-badge {
-            display: inline-block;
-            padding: 4px 8px;
-            border-radius: 12px;
-            font-size: 12px;
-            font-weight: 600;
-            text-transform: uppercase;
+        body.dark .theme-toggle:hover {
+            background: rgba(255, 255, 255, 0.15);
         }
 
-        .status-active {
-            background: #c6f6d5;
-            color: #22543d;
+        .theme-toggle i {
+            font-size: 18px;
+            color: var(--text-light);
+            transition: transform 0.5s cubic-bezier(0.68, -0.55, 0.265, 1.55);
         }
 
-        .status-expired {
-            background: #fed7d7;
-            color: #742a2a;
+        body.dark .theme-toggle i {
+            color: var(--text-dark);
         }
 
-        .status-permanent {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        .theme-toggle.rotating i {
+            transform: rotate(360deg);
+        }
+
+        .logo-section {
+            text-align: center;
+            margin-bottom: 36px;
+        }
+
+        .logo {
+            width: 80px;
+            height: 80px;
+            margin: 0 auto 20px;
+            background: linear-gradient(135deg, var(--accent) 0%, #af52de 100%);
+            border-radius: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 10px 30px rgba(0, 113, 227, 0.3);
+            animation: pulse 3s ease-in-out infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% {
+                transform: scale(1);
+            }
+            50% {
+                transform: scale(1.05);
+            }
+        }
+
+        .logo i {
+            font-size: 38px;
             color: white;
-            font-weight: bold;
         }
 
-        .node-status {
-            display: inline-block;
-            padding: 4px 8px;
-            border-radius: 12px;
-            font-size: 12px;
-            font-weight: 600;
-            text-transform: uppercase;
-            margin-left: 8px;
+        h1 {
+            font-size: 36px;
+            font-weight: 700;
+            letter-spacing: -0.5px;
+            margin-bottom: 8px;
+            background: linear-gradient(135deg, var(--text-light) 0%, var(--text-light) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
         }
 
-        .node-status-online {
-            background: #c6f6d5;
-            color: #22543d;
+        body.dark h1 {
+            background: linear-gradient(135deg, var(--text-dark) 0%, var(--text-dark) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
         }
 
-        .node-status-offline {
-            background: #fed7d7;
-            color: #742a2a;
+        .subtitle {
+            font-size: 17px;
+            color: #86868b;
+            font-weight: 400;
         }
 
-        .node-status-deleted {
-            background: #e2e8f0;
-            color: #4a5568;
-        }
-
-        .node-status-unbound {
-            background: #fef5e7;
-            color: #744210;
-        }
-
-        .node-info {
-            background: #f7fafc;
-            border: 1px solid #e2e8f0;
-            border-radius: 8px;
-            padding: 15px;
-            margin-top: 15px;
-        }
-
-        .node-info h4 {
-            color: #2d3748;
-            margin-bottom: 10px;
-            font-size: 14px;
-        }
-
-        .node-details {
+        .info-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-            gap: 10px;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
         }
 
-        .node-detail-item {
+        .info-card {
+            background: rgba(0, 0, 0, 0.02);
+            border-radius: 16px;
+            padding: 20px;
             display: flex;
-            flex-direction: column;
+            align-items: flex-start;
+            transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+            border: 1px solid rgba(0, 0, 0, 0.04);
         }
 
-        .node-detail-label {
-            font-size: 11px;
-            color: #718096;
-            margin-bottom: 2px;
-            text-transform: uppercase;
-            font-weight: 600;
+        body.dark .info-card {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
         }
 
-        .node-detail-value {
-            font-size: 13px;
-            color: #2d3748;
+        .info-card:hover {
+            transform: translateY(-2px);
+            background: rgba(0, 0, 0, 0.04);
+            box-shadow: 0 8px 20px rgba(0, 0, 0, 0.08);
+        }
+
+        body.dark .info-card:hover {
+            background: rgba(255, 255, 255, 0.08);
+            box-shadow: 0 8px 20px rgba(0, 0, 0, 0.3);
+        }
+
+        .info-icon {
+            width: 36px;
+            height: 36px;
+            border-radius: 10px;
+            background: linear-gradient(135deg, var(--accent) 0%, #af52de 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-right: 16px;
+            flex-shrink: 0;
+        }
+
+        .info-icon.green {
+            background: linear-gradient(135deg, #34c759 0%, #30d158 100%);
+        }
+
+        .info-icon.orange {
+            background: linear-gradient(135deg, #ff9500 0%, #ff9f0a 100%);
+        }
+
+        .info-icon.purple {
+            background: linear-gradient(135deg, #af52de 0%, #bf5af2 100%);
+        }
+
+        .info-icon.red {
+            background: linear-gradient(135deg, #ff3b30 0%, #ff453a 100%);
+        }
+
+        .info-icon i {
+            font-size: 16px;
+            color: white;
+        }
+
+        .info-content {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .info-title {
+            font-size: 14px;
+            color: #86868b;
+            margin-bottom: 4px;
             font-weight: 500;
         }
 
-        .actions {
-            display: flex;
-            gap: 10px;
-            flex-wrap: wrap;
-        }
-
-        .btn-small {
-            padding: 6px 12px;
-            font-size: 12px;
-        }
-
-        .loading {
-            display: none;
-            text-align: center;
-            padding: 20px;
-        }
-
-        .spinner {
-            border: 3px solid #f3f3f3;
-            border-top: 3px solid #667eea;
-            border-radius: 50%;
-            width: 30px;
-            height: 30px;
-            animation: spin 1s linear infinite;
-            margin: 0 auto 10px;
-        }
-
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-
-        .alert {
-            padding: 12px 16px;
-            border-radius: 8px;
-            margin-bottom: 20px;
-            display: none;
-        }
-
-        .alert-success {
-            background: #c6f6d5;
-            color: #22543d;
-            border: 1px solid #9ae6b4;
-        }
-
-        .alert-error {
-            background: #fed7d7;
-            color: #742a2a;
-            border: 1px solid #feb2b2;
-        }
-
-        .copy-btn {
-            background: #4299e1;
-            color: white;
-            border: none;
-            padding: 4px 8px;
-            border-radius: 4px;
-            font-size: 12px;
-            cursor: pointer;
-            margin-left: 8px;
-        }
-
-        .copy-btn:hover {
-            background: #3182ce;
-        }
-
-        /* 永久Token选项样式 */
-        #permanentToken {
-            transform: scale(1.2);
-            margin-right: 8px;
-        }
-
-        #permanentToken:checked + span {
-            color: #667eea;
+        .info-value {
+            font-size: 17px;
             font-weight: 600;
+            color: var(--text-light);
+            word-break: break-word;
         }
 
-        #expiresDays:disabled {
-            background: #f7fafc;
-            color: #a0aec0;
-            cursor: not-allowed;
+        body.dark .info-value {
+            color: var(--text-dark);
+        }
+
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            padding: 8px 16px;
+            background: var(--accent);
+            color: white;
+            border-radius: 100px;
+            font-size: 14px;
+            font-weight: 600;
+            gap: 8px;
+        }
+
+        .badge i {
+            font-size: 12px;
+        }
+
+        .memory-bar {
+            width: 100%;
+            height: 6px;
+            background: rgba(0, 0, 0, 0.1);
+            border-radius: 10px;
+            overflow: hidden;
+            margin-top: 8px;
+        }
+
+        body.dark .memory-bar {
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        .memory-bar-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #34c759 0%, #30d158 100%);
+            border-radius: 10px;
+            transition: width 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .memory-bar-fill.warning {
+            background: linear-gradient(90deg, #ff9500 0%, #ff9f0a 100%);
+        }
+
+        .memory-bar-fill.danger {
+            background: linear-gradient(90deg, #ff3b30 0%, #ff453a 100%);
+        }
+
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            margin-top: 24px;
+            padding: 20px;
+            background: rgba(52, 199, 89, 0.1);
+            border-radius: 12px;
+            border: 1px solid rgba(52, 199, 89, 0.2);
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #34c759;
+            animation: blink 2s ease-in-out infinite;
+        }
+
+        @keyframes blink {
+            0%, 100% {
+                opacity: 1;
+            }
+            50% {
+                opacity: 0.4;
+            }
+        }
+
+        .status-text {
+            font-size: 15px;
+            font-weight: 500;
+            color: #34c759;
+        }
+
+        .system-section {
+            margin-top: 20px;
+            padding-top: 20px;
+            border-top: 1px solid rgba(0, 0, 0, 0.06);
+        }
+
+        body.dark .system-section {
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .section-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: #86868b;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 16px;
         }
 
         @media (max-width: 768px) {
             .container {
-                padding: 10px;
+                padding: 40px 30px;
             }
 
-            .header h1 {
-                font-size: 2rem;
+            h1 {
+                font-size: 32px;
             }
 
-            .token-info {
+            .subtitle {
+                font-size: 15px;
+            }
+
+            .logo {
+                width: 80px;
+                height: 80px;
+            }
+
+            .logo i {
+                font-size: 36px;
+            }
+
+            .info-card {
+                padding: 20px;
+            }
+
+            .info-grid {
                 grid-template-columns: 1fr;
             }
+        }
 
-            .actions {
-                flex-direction: column;
+        @supports not ((-webkit-backdrop-filter: none) or (backdrop-filter: none)) {
+            .container {
+                background: rgba(255, 255, 255, 0.95);
+            }
+
+            body.dark .container {
+                background: rgba(30, 30, 30, 0.95);
             }
         }
     </style>
@@ -378,392 +437,239 @@
 <body>
     <div class="container">
         <div class="header">
-            <h1>🚀 Endless Node</h1>
-            <p>Token 管理中心</p>
-            <div id="userInfo" style="margin-top: 15px; display: none;">
-                <span id="welcomeText"></span>
-                <button id="changePasswordBtn" class="btn btn-small" style="margin-left: 10px;">修改密码</button>
-                <button id="logoutBtn" class="btn btn-small" style="margin-left: 10px;">登出</button>
-            </div>
+            <div></div>
+            <button aria-label="切换主题" class="theme-toggle">
+                <i class="fas fa-moon"></i>
+            </button>
         </div>
 
-        <div class="alert alert-success" id="successAlert"></div>
-        <div class="alert alert-error" id="errorAlert"></div>
+        <div class="logo-section">
+            <div class="logo">
+                <i class="fas fa-server"></i>
+            </div>
+            <h1 id="sys-name">Endless-Node</h1>
+            <p class="subtitle">Node API Service</p>
+        </div>
 
-        <!-- 创建新Token -->
-        <div class="card">
-            <h2>创建新 Token</h2>
-            <form id="createTokenForm">
-                <div class="form-group">
-                    <label for="scope">权限范围:</label>
-                    <select id="scope" name="scope">
-                        <option value="SERVER_CONTROL,FILE_MANAGE">服务器控制 + 文件管理</option>
-                        <option value="SERVER_CONTROL">仅服务器控制</option>
-                        <option value="FILE_MANAGE">仅文件管理</option>
-                    </select>
+        <div class="info-grid">
+            <div class="info-card">
+                <div class="info-icon">
+                    <i class="fas fa-cube"></i>
                 </div>
-                <div class="form-group">
-                    <label for="expiresDays">有效期:</label>
-                    <div style="display: flex; gap: 10px; align-items: center;">
-                        <input type="number" id="expiresDays" name="expiresDays" value="7" min="1" max="365" style="flex: 1;">
-                        <label style="display: flex; align-items: center; gap: 5px; margin: 0; font-weight: normal;">
-                            <input type="checkbox" id="permanentToken" name="permanentToken">
-                            永久有效
-                        </label>
+                <div class="info-content">
+                    <div class="info-title">节点名称</div>
+                    <div class="info-value" id="sys-name-value">加载中...</div>
+                </div>
+            </div>
+
+            <div class="info-card">
+                <div class="info-icon purple">
+                    <i class="fas fa-code-branch"></i>
+                </div>
+                <div class="info-content">
+                    <div class="info-title">节点版本</div>
+                    <div class="info-value">
+                        <span class="badge">
+                            <i class="fas fa-tag"></i>
+                            <span id="version-text">v0.0.0</span>
+                        </span>
                     </div>
                 </div>
-                <div class="form-group">
-                    <label for="remark">备注信息:</label>
-                    <input type="text" id="remark" name="remark" placeholder="请输入Token用途说明（可选）">
+            </div>
+
+            <div class="info-card">
+                <div class="info-icon green">
+                    <i class="fas fa-memory"></i>
                 </div>
-                <button type="submit" class="btn btn-success">创建 Token</button>
-            </form>
+                <div class="info-content">
+                    <div class="info-title">JVM 内存</div>
+                    <div class="info-value" id="memory-text">加载中...</div>
+                    <div class="memory-bar">
+                        <div class="memory-bar-fill" id="memory-bar" style="width: 0%"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="info-card">
+                <div class="info-icon orange">
+                    <i class="fas fa-clock"></i>
+                </div>
+                <div class="info-content">
+                    <div class="info-title">运行时间</div>
+                    <div class="info-value" id="uptime-text">加载中...</div>
+                </div>
+            </div>
+
+            <div class="info-card">
+                <div class="info-icon red">
+                    <i class="fas fa-microchip"></i>
+                </div>
+                <div class="info-content">
+                    <div class="info-title">CPU 核心</div>
+                    <div class="info-value" id="cpu-text">加载中...</div>
+                </div>
+            </div>
+
+            <div class="info-card">
+                <div class="info-icon">
+                    <i class="fab fa-java"></i>
+                </div>
+                <div class="info-content">
+                    <div class="info-title">Java 版本</div>
+                    <div class="info-value" id="java-text">加载中...</div>
+                </div>
+            </div>
         </div>
 
-        <!-- Token列表 -->
-        <div class="card">
-            <h2>Token 列表</h2>
-            <div class="loading" id="loading">
-                <div class="spinner"></div>
-                <p>加载中...</p>
+        <div class="system-section">
+            <div class="section-title">操作系统</div>
+            <div class="info-grid">
+                <div class="info-card">
+                    <div class="info-icon purple">
+                        <i class="fas fa-desktop"></i>
+                    </div>
+                    <div class="info-content">
+                        <div class="info-title">系统信息</div>
+                        <div class="info-value" id="os-text">加载中...</div>
+                    </div>
+                </div>
+
+                <div class="info-card">
+                    <div class="info-icon green">
+                        <i class="fas fa-calendar-alt"></i>
+                    </div>
+                    <div class="info-content">
+                        <div class="info-title">服务器时间</div>
+                        <div class="info-value" id="server-time">加载中...</div>
+                    </div>
+                </div>
             </div>
-            <div class="token-list" id="tokenList">
-                <!-- Token列表将在这里动态加载 -->
-            </div>
+        </div>
+
+        <div class="status-indicator">
+            <div class="status-dot"></div>
+            <div class="status-text">节点运行正常</div>
         </div>
     </div>
 
     <script>
-        // 显示消息
-        function showAlert(message, type = 'success') {
-            const alertId = type === 'success' ? 'successAlert' : 'errorAlert';
-            const alert = document.getElementById(alertId);
-            alert.textContent = message;
-            alert.style.display = 'block';
+        // 主题切换
+        const themeToggle = document.querySelector('.theme-toggle');
+        const body = document.body;
+        const icon = themeToggle.querySelector('i');
+
+        const savedTheme = localStorage.getItem('theme');
+        if (savedTheme === 'dark') {
+            body.classList.add('dark');
+            icon.classList.remove('fa-moon');
+            icon.classList.add('fa-sun');
+        }
+
+        themeToggle.addEventListener('click', () => {
+            themeToggle.classList.add('rotating');
+
             setTimeout(() => {
-                alert.style.display = 'none';
-            }, 3000);
-        }
+                body.classList.toggle('dark');
 
-        // 复制到剪贴板
-        function copyToClipboard(text) {
-            navigator.clipboard.writeText(text).then(() => {
-                showAlert('Token已复制到剪贴板');
-            }).catch(() => {
-                showAlert('复制失败，请手动复制', 'error');
-            });
-        }
-
-        // 格式化日期
-        function formatDate(dateString) {
-            const date = new Date(dateString);
-            return date.toLocaleString('zh-CN');
-        }
-
-        // 检查token是否过期
-        function isExpired(expiresAt) {
-            // 如果过期时间是最大时间，表示永久Token
-            const maxTime = new Date(2099, 11, 31).getTime(); // 2099年12月31日作为永久Token的判断标准
-            if (new Date(expiresAt).getTime() > maxTime) {
-                return false; // 永久Token永不过期
-            }
-            return new Date(expiresAt) < new Date();
-        }
-
-        // 检查是否为永久Token
-        function isPermanentToken(expiresAt) {
-            const maxTime = new Date(2099, 11, 31).getTime(); // 2099年12月31日作为永久Token的判断标准
-            return new Date(expiresAt).getTime() > maxTime;
-        }
-
-        // 渲染token列表
-        function renderTokenList(tokens) {
-            const tokenList = document.getElementById('tokenList');
-            
-            if (tokens.length === 0) {
-                tokenList.innerHTML = '<p style="text-align: center; color: #718096; padding: 40px;">暂无Token</p>';
-                return;
-            }
-
-            tokenList.innerHTML = tokens.map(token => {
-                const isExpiredToken = isExpired(token.expiresAt);
-                const isPermanent = isPermanentToken(token.expiresAt);
-                let statusClass, statusText;
-                
-                if (isPermanent) {
-                    statusClass = 'status-permanent';
-                    statusText = '永久有效';
-                } else if (isExpiredToken) {
-                    statusClass = 'status-expired';
-                    statusText = '已过期';
+                if (body.classList.contains('dark')) {
+                    icon.classList.remove('fa-moon');
+                    icon.classList.add('fa-sun');
+                    localStorage.setItem('theme', 'dark');
                 } else {
-                    statusClass = 'status-active';
-                    statusText = '有效';
+                    icon.classList.remove('fa-sun');
+                    icon.classList.add('fa-moon');
+                    localStorage.setItem('theme', 'light');
                 }
+            }, 250);
 
-                // 节点状态
-                let nodeStatusHtml = '';
-                if (token.isBound) {
-                    const nodeStatusClass = `node-status-${token.nodeStatus.toLowerCase()}`;
-                    const nodeStatusText = token.nodeStatus === 'ONLINE' ? '在线' : 
-                                         token.nodeStatus === 'OFFLINE' ? '离线' : 
-                                         token.nodeStatus === 'DELETED' ? '已删除' : '未知';
-                    nodeStatusHtml = `<span class="node-status ${nodeStatusClass}">${nodeStatusText}</span>`;
-                } else {
-                    nodeStatusHtml = `<span class="node-status node-status-unbound">未绑定</span>`;
-                }
-
-                // 节点信息
-                let nodeInfoHtml = '';
-                if (token.isBound) {
-                    nodeInfoHtml = `
-                        <div class="node-info">
-                            <h4>绑定节点信息 ${nodeStatusHtml}</h4>
-                            <div class="node-details">
-                                <div class="node-detail-item">
-                                    <div class="node-detail-label">节点UUID</div>
-                                    <div class="node-detail-value">${token.nodeUuid || 'N/A'}</div>
-                                </div>
-                                <div class="node-detail-item">
-                                    <div class="node-detail-label">版本号</div>
-                                    <div class="node-detail-value">${token.nodeVersion || 'N/A'}</div>
-                                </div>
-                                <div class="node-detail-item">
-                                    <div class="node-detail-label">IP地址</div>
-                                    <div class="node-detail-value">${token.nodeIpAddress || 'N/A'}</div>
-                                </div>
-                                <div class="node-detail-item">
-                                    <div class="node-detail-label">协议版本</div>
-                                    <div class="node-detail-value">${token.nodeProtocolVersion || 'N/A'}</div>
-                                </div>
-                                <div class="node-detail-item">
-                                    <div class="node-detail-label">注册时间</div>
-                                    <div class="node-detail-value">${token.nodeRegisteredAt ? formatDate(token.nodeRegisteredAt) : 'N/A'}</div>
-                                </div>
-                                <div class="node-detail-item">
-                                    <div class="node-detail-label">最后通信</div>
-                                    <div class="node-detail-value">${token.nodeLastCommunication ? formatDate(token.nodeLastCommunication) : 'N/A'}</div>
-                                </div>
-                            </div>
-                        </div>
-                    `;
-                } else {
-                    nodeInfoHtml = `
-                        <div class="node-info">
-                            <h4>节点绑定状态 ${nodeStatusHtml}</h4>
-                            <p style="color: #718096; font-size: 14px; margin: 0;">此Token尚未被任何节点绑定使用</p>
-                        </div>
-                    `;
-                }
-
-                return `
-                    <div class="token-item">
-                        <div class="token-header">
-                            <h3>Token #${token.token.substring(0, 8)}...</h3>
-                            <span class="status-badge ${statusClass}">${statusText}</span>
-                        </div>
-                        <div class="token-value">
-                            ${token.token}
-                            <button class="copy-btn" onclick="copyToClipboard('${token.token}')">复制</button>
-                        </div>
-                        <div class="token-info">
-                            <div class="info-item">
-                                <div class="info-label">主控端ID</div>
-                                <div class="info-value">${token.masterId}</div>
-                            </div>
-                            <div class="info-item">
-                                <div class="info-label">权限范围</div>
-                                <div class="info-value">${token.scope}</div>
-                            </div>
-                            <div class="info-item">
-                                <div class="info-label">创建时间</div>
-                                <div class="info-value">${formatDate(token.createdAt)}</div>
-                            </div>
-                            <div class="info-item">
-                                <div class="info-label">过期时间</div>
-                                <div class="info-value">${isPermanent ? '永不过期' : formatDate(token.expiresAt)}</div>
-                            </div>
-                            ${token.remark ? `
-                            <div class="info-item" style="grid-column: 1 / -1;">
-                                <div class="info-label">备注</div>
-                                <div class="info-value">${token.remark}</div>
-                            </div>
-                            ` : ''}
-                        </div>
-                        ${nodeInfoHtml}
-                        <div class="actions">
-                            <button class="btn btn-small" onclick="verifyToken('${token.token}')">验证</button>
-                            <button class="btn btn-danger btn-small" onclick="deleteToken('${token.token}')">删除</button>
-                        </div>
-                    </div>
-                `;
-            }).join('');
-        }
-
-        // 加载token列表
-        async function loadTokens() {
-            const loading = document.getElementById('loading');
-            const tokenList = document.getElementById('tokenList');
-            
-            loading.style.display = 'block';
-            tokenList.style.display = 'none';
-
-            try {
-                const response = await fetch('/api/tokens');
-                const tokens = await response.json();
-                renderTokenList(tokens);
-            } catch (error) {
-                showAlert('加载Token列表失败: ' + error.message, 'error');
-            } finally {
-                loading.style.display = 'none';
-                tokenList.style.display = 'block';
-            }
-        }
-
-        // 创建token
-        async function createToken(formData) {
-            try {
-                const response = await fetch('/api/tokens', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify(formData)
-                });
-
-                if (response.ok) {
-                    showAlert('Token创建成功');
-                    loadTokens();
-                } else {
-                    const error = await response.json();
-                    showAlert('创建失败: ' + error.message, 'error');
-                }
-            } catch (error) {
-                showAlert('创建失败: ' + error.message, 'error');
-            }
-        }
-
-        // 验证token
-        async function verifyToken(token) {
-            try {
-                const response = await fetch(`/api/auth/verify?token=${encodeURIComponent(token)}`);
-                const result = await response.json();
-                
-                if (result.valid) {
-                    showAlert('Token验证成功');
-                } else {
-                    showAlert('Token验证失败: ' + result.message, 'error');
-                }
-            } catch (error) {
-                showAlert('验证失败: ' + error.message, 'error');
-            }
-        }
-
-        // 删除token
-        async function deleteToken(token) {
-            if (!confirm('确定要删除这个Token吗？')) {
-                return;
-            }
-
-            try {
-                const response = await fetch(`/api/tokens/${encodeURIComponent(token)}`, {
-                    method: 'DELETE'
-                });
-
-                if (response.ok) {
-                    showAlert('Token删除成功');
-                    loadTokens();
-                } else {
-                    const error = await response.json();
-                    showAlert('删除失败: ' + error.message, 'error');
-                }
-            } catch (error) {
-                showAlert('删除失败: ' + error.message, 'error');
-            }
-        }
-
-        // 处理永久Token选项
-        document.getElementById('permanentToken').addEventListener('change', function() {
-            const expiresDaysInput = document.getElementById('expiresDays');
-            if (this.checked) {
-                expiresDaysInput.disabled = true;
-                expiresDaysInput.value = '';
-            } else {
-                expiresDaysInput.disabled = false;
-                expiresDaysInput.value = '7';
-            }
+            setTimeout(() => {
+                themeToggle.classList.remove('rotating');
+            }, 500);
         });
 
-        // 表单提交处理
-        document.getElementById('createTokenForm').addEventListener('submit', function(e) {
-            e.preventDefault();
-            
-            const isPermanent = document.getElementById('permanentToken').checked;
-            const formData = {
-                scope: document.getElementById('scope').value,
-                expiresDays: isPermanent ? -1 : parseInt(document.getElementById('expiresDays').value),
-                isPermanent: isPermanent,
-                remark: document.getElementById('remark').value
-            };
-
-            createToken(formData);
-        });
-
-        // 检查登录状态
-        async function checkLoginStatus() {
-            try {
-                const response = await fetch('/api/auth/check');
-                const result = await response.json();
-                
-                if (result.loggedIn) {
-                    // 已登录，显示用户信息
-                    document.getElementById('userInfo').style.display = 'block';
-                    document.getElementById('welcomeText').textContent = `欢迎，${result.username}`;
-                    loadTokens();
-                } else {
-                    // 未登录，跳转到登录页
-                    window.location.href = '/login.html';
-                }
-            } catch (error) {
-                console.log('检查登录状态失败:', error);
-                // 如果检查失败，也跳转到登录页
-                window.location.href = '/login.html';
-            }
+        // 格式化日期时间
+        function formatDateTime(dateStr) {
+            const date = new Date(dateStr);
+            const year = date.getFullYear();
+            const month = String(date.getMonth() + 1).padStart(2, '0');
+            const day = String(date.getDate()).padStart(2, '0');
+            const hours = String(date.getHours()).padStart(2, '0');
+            const minutes = String(date.getMinutes()).padStart(2, '0');
+            const seconds = String(date.getSeconds()).padStart(2, '0');
+            return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
         }
 
-        // 登出功能
-        async function logout() {
-            try {
-                const response = await fetch('/api/auth/logout', {
-                    method: 'POST'
+        // 获取系统信息
+        function loadSystemInfo() {
+            fetch('/system/info', {credentials: 'same-origin'})
+                .then(r => r.json())
+                .then(info => {
+                    // 基础信息
+                    const systemName = info.name || 'Endless-Node';
+                    const systemVersion = info.version || '1.0';
+
+                    document.getElementById('page-title').textContent = systemName;
+                    document.getElementById('sys-name').textContent = systemName;
+                    document.getElementById('sys-name-value').textContent = systemName;
+                    document.getElementById('version-text').textContent = 'v' + systemVersion;
+
+                    // 内存信息
+                    if (info.memory) {
+                        const mem = info.memory;
+                        document.getElementById('memory-text').textContent =
+                            `${mem.used} / ${mem.total} (${mem.usagePercent}%)`;
+
+                        const memBar = document.getElementById('memory-bar');
+                        memBar.style.width = mem.usagePercent + '%';
+
+                        // 根据使用率改变颜色
+                        memBar.className = 'memory-bar-fill';
+                        if (mem.usagePercent > 80) {
+                            memBar.classList.add('danger');
+                        } else if (mem.usagePercent > 60) {
+                            memBar.classList.add('warning');
+                        }
+                    }
+
+                    // 运行时间
+                    if (info.uptime) {
+                        document.getElementById('uptime-text').textContent = info.uptime;
+                    }
+
+                    // CPU 核心
+                    if (info.cpuCores) {
+                        document.getElementById('cpu-text').textContent = info.cpuCores + ' 核';
+                    }
+
+                    // Java 版本
+                    if (info.javaVersion) {
+                        document.getElementById('java-text').textContent = info.javaVersion;
+                    }
+
+                    // 操作系统
+                    if (info.osName) {
+                        const osInfo = `${info.osName} ${info.osVersion || ''} (${info.osArch || ''})`;
+                        document.getElementById('os-text').textContent = osInfo;
+                    }
+
+                    // 服务器时间
+                    if (info.serverTime) {
+                        document.getElementById('server-time').textContent = formatDateTime(info.serverTime);
+                    }
+                })
+                .catch(err => {
+                    console.error('加载系统信息失败:', err);
+                    document.getElementById('page-title').textContent = 'Endless-Node';
+                    document.getElementById('sys-name-value').textContent = 'Endless-Node';
+                    document.getElementById('version-text').textContent = 'v1.0';
                 });
-                
-                if (response.ok) {
-                    showAlert('已登出');
-                    setTimeout(() => {
-                        window.location.href = '/login.html';
-                    }, 1000);
-                } else {
-                    showAlert('登出失败', 'error');
-                }
-            } catch (error) {
-                showAlert('登出失败: ' + error.message, 'error');
-            }
         }
 
-        // 修改密码功能
-        function changePassword() {
-            window.location.href = '/change-password.html';
-        }
+        // 页面加载时获取信息
+        document.addEventListener('DOMContentLoaded', loadSystemInfo);
 
-        // 页面加载时检查登录状态
-        document.addEventListener('DOMContentLoaded', function() {
-            checkLoginStatus();
-            
-            // 绑定按钮事件
-            document.getElementById('logoutBtn').addEventListener('click', logout);
-            document.getElementById('changePasswordBtn').addEventListener('click', changePassword);
-        });
+        // 每30秒刷新一次数据
+        setInterval(loadSystemInfo, 30000);
     </script>
 </body>
 </html>

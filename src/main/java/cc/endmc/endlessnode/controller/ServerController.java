@@ -21,7 +21,8 @@ import org.springframework.web.bind.annotation.*;
 import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * 服务器实例控制器
@@ -47,18 +48,45 @@ public class ServerController {
     private static final int MAX_CONSOLE_LOG_LINES = 500; // 每个服务器最多缓存500条日志
 
     // 用于同步服务器操作的锁对象
-    private static final Map<Integer, Object> SERVER_LOCKS = new HashMap<>();
+    private static final Map<Integer, Object> SERVER_LOCKS = new ConcurrentHashMap<>();
 
     // 控制台日志缓存：服务器ID -> 日志列表
-    private static final Map<Integer, List<String>> CONSOLE_LOG_CACHE = new HashMap<>();
+    private static final ConcurrentHashMap<Integer, LinkedBlockingDeque<String>> CONSOLE_LOG_CACHE = new ConcurrentHashMap<>();
+
+    // 控制台消息派发队列和线程池
+    private static final int CONSOLE_DISPATCH_QUEUE_CAPACITY = 2048;
+    private static final AtomicInteger CONSOLE_DISPATCH_THREAD_COUNTER = new AtomicInteger(1);
+    private static final BlockingQueue<ConsoleDispatchMessage> CONSOLE_DISPATCH_QUEUE =
+            new LinkedBlockingQueue<>(CONSOLE_DISPATCH_QUEUE_CAPACITY);
+    private static final ExecutorService CONSOLE_DISPATCH_EXECUTOR = Executors.newSingleThreadExecutor(runnable -> {
+        Thread thread = new Thread(runnable, "ConsoleDispatch-" + CONSOLE_DISPATCH_THREAD_COUNTER.getAndIncrement());
+        thread.setDaemon(true);
+        return thread;
+    });
+    private static final long PROCESS_INFO_CACHE_TTL_MS = 5000L;
+    private static final ConcurrentHashMap<Long, CachedProcessInfo> PROCESS_INFO_CACHE = new ConcurrentHashMap<>();
+
+    // 启动控制台消息派发线程
+    static {
+        CONSOLE_DISPATCH_EXECUTOR.submit(() -> {
+            while (!Thread.currentThread().isInterrupted()) {
+                try {
+                    ConsoleDispatchMessage message = CONSOLE_DISPATCH_QUEUE.take();
+                    message.dispatch();
+                } catch (InterruptedException interruptedException) {
+                    Thread.currentThread().interrupt();
+                } catch (Exception dispatchError) {
+                    log.error("控制台消息派发失败", dispatchError);
+                }
+            }
+        });
+    }
 
     /**
      * 获取服务器操作锁
      */
     private Object getServerLock(Integer serverId) {
-        synchronized (SERVER_LOCKS) {
-            return SERVER_LOCKS.computeIfAbsent(serverId, k -> new Object());
-        }
+        return SERVER_LOCKS.computeIfAbsent(serverId, k -> new Object());
     }
 
     /**
@@ -166,6 +194,11 @@ public class ServerController {
         }
 
         log.info("所有服务器进程清理完成");
+
+        CONSOLE_DISPATCH_EXECUTOR.shutdownNow();
+        CONSOLE_DISPATCH_QUEUE.clear();
+
+        PROCESS_INFO_CACHE.clear();
     }
 
     /**
@@ -862,9 +895,7 @@ public class ServerController {
                 serverInstancesService.removeById(serverId);
 
                 // 清理锁对象
-                synchronized (SERVER_LOCKS) {
-                    SERVER_LOCKS.remove(serverId);
-                }
+                SERVER_LOCKS.remove(serverId);
 
                 // 清理日志缓存
                 clearLogCache(serverId);
@@ -1147,37 +1178,32 @@ public class ServerController {
         // 验证令牌
         AccessTokens accessToken = validateToken(token);
         if (accessToken == null) {
-            messagingTemplate.convertAndSend(TOPIC_CONSOLE + serverId,
-                    Map.of("error", "无效的访问令牌"));
+            enqueueConsoleMessage(serverId, Map.of("error", "无效的访问令牌"));
             return;
         }
 
         // 获取服务器实例
         ServerInstances server = serverInstancesService.getById(serverId);
         if (server == null) {
-            messagingTemplate.convertAndSend(TOPIC_CONSOLE + serverId,
-                    Map.of("error", "未找到服务器"));
+            enqueueConsoleMessage(serverId, Map.of("error", "未找到服务器"));
             return;
         }
 
         // 检查权限
         if (!hasServerPermission(server, accessToken)) {
-            messagingTemplate.convertAndSend(TOPIC_CONSOLE + serverId,
-                    Map.of("error", "权限不足"));
+            enqueueConsoleMessage(serverId, Map.of("error", "权限不足"));
             return;
         }
 
         // 检查服务器是否正在运行
         Process process = Node.getRunningServers().get(serverId);
         if (process == null || !process.isAlive()) {
-            messagingTemplate.convertAndSend(TOPIC_CONSOLE + serverId,
-                    Map.of("error", "服务器未在运行"));
+            enqueueConsoleMessage(serverId, Map.of("error", "服务器未在运行"));
             return;
         }
 
         // 发送订阅成功消息
-        messagingTemplate.convertAndSend(TOPIC_CONSOLE + serverId,
-                Map.of("message", "已订阅控制台输出"));
+        enqueueConsoleMessage(serverId, Map.of("message", "已订阅控制台输出"));
     }
 
     /**
@@ -1191,16 +1217,12 @@ public class ServerController {
             return;
         }
 
-        synchronized (CONSOLE_LOG_CACHE) {
-            List<String> logCache = CONSOLE_LOG_CACHE.computeIfAbsent(serverId, k -> new ArrayList<>());
-            logCache.add(logLine);
+        LinkedBlockingDeque<String> logCache = CONSOLE_LOG_CACHE.computeIfAbsent(serverId,
+                k -> new LinkedBlockingDeque<>(MAX_CONSOLE_LOG_LINES));
 
-            // 限制缓存大小，保留最新的日志
-            if (logCache.size() > MAX_CONSOLE_LOG_LINES) {
-                // 移除最旧的日志（保留最新的MAX_CONSOLE_LOG_LINES条）
-                int removeCount = logCache.size() - MAX_CONSOLE_LOG_LINES;
-                logCache.subList(0, removeCount).clear();
-            }
+        // 保持最新的日志，超出容量时移除最旧的日志
+        while (!logCache.offerLast(logLine)) {
+            logCache.pollFirst();
         }
     }
 
@@ -1215,9 +1237,11 @@ public class ServerController {
             return new ArrayList<>();
         }
 
-        synchronized (CONSOLE_LOG_CACHE) {
-            return new ArrayList<>(CONSOLE_LOG_CACHE.getOrDefault(serverId, new ArrayList<>()));
+        LinkedBlockingDeque<String> logCache = CONSOLE_LOG_CACHE.get(serverId);
+        if (logCache == null) {
+            return new ArrayList<>();
         }
+        return new ArrayList<>(logCache);
     }
 
     /**
@@ -1230,9 +1254,7 @@ public class ServerController {
             return;
         }
 
-        synchronized (CONSOLE_LOG_CACHE) {
-            CONSOLE_LOG_CACHE.remove(serverId);
-        }
+        CONSOLE_LOG_CACHE.remove(serverId);
     }
 
     /**
@@ -1268,13 +1290,7 @@ public class ServerController {
 
                     // 发送控制台输出到WebSocket
                     final String finalLine = line;
-                    try {
-                        messagingTemplate.convertAndSend(TOPIC_CONSOLE + serverId,
-                                Map.of("line", finalLine));
-                    } catch (Exception e) {
-                        log.error("向WebSocket发送服务器控制台输出时发生错误: {}", serverId, e);
-                        // 继续读取，不要因为发送失败而中断
-                    }
+                    enqueueConsoleMessage(serverId, Map.of("line", finalLine));
                 }
             } catch (IOException e) {
                 // 如果进程已经终止，这是正常的
@@ -1287,12 +1303,7 @@ public class ServerController {
                 log.error("读取服务器控制台输出时发生错误: {}", serverId, e);
                 String errorMsg = "读取控制台失败: " + e.getMessage();
                 addLogToCache(serverId, "[ERROR] " + errorMsg);
-                try {
-                    messagingTemplate.convertAndSend(TOPIC_CONSOLE + serverId,
-                            Map.of("error", errorMsg));
-                } catch (Exception sendEx) {
-                    log.error("向WebSocket发送错误消息时发生错误", sendEx);
-                }
+                enqueueConsoleMessage(serverId, Map.of("error", errorMsg));
             } finally {
                 // 不要关闭 reader，因为它关联到进程的输入流
                 // 进程终止时会自动关闭
@@ -1341,6 +1352,94 @@ public class ServerController {
         }
 
         log.debug("已停止服务器控制台输出线程: {}", serverId);
+    }
+
+    /**
+     * 将控制台消息加入派发队列
+     *
+     * @param serverId 服务器ID
+     * @param payload  消息内容
+     */
+    private void enqueueConsoleMessage(Integer serverId, Map<String, Object> payload) {
+        if (serverId == null || payload == null) {
+            return;
+        }
+
+        ConsoleDispatchMessage message = new ConsoleDispatchMessage(messagingTemplate, serverId, payload);
+        if (!CONSOLE_DISPATCH_QUEUE.offer(message)) {
+            ConsoleDispatchMessage dropped = CONSOLE_DISPATCH_QUEUE.poll();
+            if (dropped != null && log.isDebugEnabled()) {
+                log.debug("控制台消息队列已满，丢弃服务器 {} 的旧消息", dropped.serverId);
+            }
+            if (!CONSOLE_DISPATCH_QUEUE.offer(message) && log.isWarnEnabled()) {
+                log.warn("控制台消息队列已满，丢弃服务器 {} 的最新消息", serverId);
+            }
+        }
+    }
+
+    /**
+     * 获取进程详细信息
+     *
+     * @param process 进程对象
+     * @return 进程信息Map
+     */
+    private Map<String, Object> getProcessInfo(Process process) {
+        Map<String, Object> processInfo = new HashMap<>();
+
+        try {
+            // 基本进程信息
+            processInfo.put("alive", process.isAlive());
+
+            // 获取进程ID
+            try {
+                long pid = process.pid();
+                processInfo.put("pid", pid);
+
+                // 尝试获取更详细的进程信息
+                try {
+                    Optional<ProcessHandle> processHandleOpt = ProcessHandle.of(pid);
+                    if (processHandleOpt.isPresent()) {
+                        ProcessHandle processHandle = processHandleOpt.get();
+                        ProcessHandle.Info info = processHandle.info();
+
+                        // 命令和参数
+                        info.command().ifPresent(cmd -> processInfo.put("command", cmd));
+                        info.arguments().ifPresent(args -> processInfo.put("arguments", Arrays.asList(args)));
+
+                        // 启动时间
+                        info.startInstant().ifPresent(start ->
+                                processInfo.put("startInstant", start.toString()));
+
+                        // CPU 时间
+                        info.totalCpuDuration().ifPresent(cpu -> {
+                            processInfo.put("totalCpuDurationSeconds", cpu.getSeconds());
+                            processInfo.put("totalCpuDurationNanos", cpu.getNano());
+                        });
+
+                        // 用户信息
+                        info.user().ifPresent(user -> processInfo.put("user", user));
+                    }
+                } catch (Exception e) {
+                    log.debug("无法获取 ProcessHandle 信息: {}", e.getMessage());
+                }
+
+                // 获取内存和CPU使用情况（通过系统命令）
+                Map<String, Object> resourceUsage = getCachedProcessResourceUsage(pid);
+                if (!resourceUsage.isEmpty()) {
+                    processInfo.put("resourceUsage", resourceUsage);
+                }
+
+            } catch (UnsupportedOperationException e) {
+                processInfo.put("pid", null);
+                log.debug("平台不支持获取 PID");
+            }
+
+        } catch (Exception e) {
+            log.error("获取进程信息时发生错误", e);
+            processInfo.put("error", "无法获取进程详细信息: " + e.getMessage());
+        }
+
+        return processInfo;
     }
 
     /**
@@ -1868,68 +1967,41 @@ public class ServerController {
     }
 
     /**
-     * 获取进程详细信息
+     * 获取缓存的进程资源使用情况
      *
-     * @param process 进程对象
-     * @return 进程信息Map
+     * @param pid 进程ID
+     * @return 资源使用情况Map
      */
-    private Map<String, Object> getProcessInfo(Process process) {
-        Map<String, Object> processInfo = new HashMap<>();
-
-        try {
-            // 基本进程信息
-            processInfo.put("alive", process.isAlive());
-
-            // 获取进程ID
-            try {
-                long pid = process.pid();
-                processInfo.put("pid", pid);
-
-                // 尝试获取更详细的进程信息
-                try {
-                    Optional<ProcessHandle> processHandleOpt = ProcessHandle.of(pid);
-                    if (processHandleOpt.isPresent()) {
-                        ProcessHandle processHandle = processHandleOpt.get();
-                        ProcessHandle.Info info = processHandle.info();
-
-                        // 命令和参数
-                        info.command().ifPresent(cmd -> processInfo.put("command", cmd));
-                        info.arguments().ifPresent(args -> processInfo.put("arguments", Arrays.asList(args)));
-
-                        // 启动时间
-                        info.startInstant().ifPresent(start ->
-                                processInfo.put("startInstant", start.toString()));
-
-                        // CPU 时间
-                        info.totalCpuDuration().ifPresent(cpu -> {
-                            processInfo.put("totalCpuDurationSeconds", cpu.getSeconds());
-                            processInfo.put("totalCpuDurationNanos", cpu.getNano());
-                        });
-
-                        // 用户信息
-                        info.user().ifPresent(user -> processInfo.put("user", user));
-                    }
-                } catch (Exception e) {
-                    log.debug("无法获取 ProcessHandle 信息: {}", e.getMessage());
-                }
-
-                // 获取内存和CPU使用情况（通过系统命令）
-                Map<String, Object> resourceUsage = getProcessResourceUsage(pid);
-                if (!resourceUsage.isEmpty()) {
-                    processInfo.put("resourceUsage", resourceUsage);
-                }
-
-            } catch (UnsupportedOperationException e) {
-                processInfo.put("pid", null);
-                log.debug("平台不支持获取 PID");
-            }
-
-        } catch (Exception e) {
-            log.error("获取进程信息时发生错误", e);
-            processInfo.put("error", "无法获取进程详细信息: " + e.getMessage());
+    private Map<String, Object> getCachedProcessResourceUsage(long pid) {
+        if (pid <= 0) {
+            return Collections.emptyMap();
         }
 
-        return processInfo;
+        long now = System.currentTimeMillis();
+        CachedProcessInfo cached = PROCESS_INFO_CACHE.get(pid);
+        if (cached != null && now - cached.timestamp < PROCESS_INFO_CACHE_TTL_MS) {
+            return new HashMap<>(cached.data);
+        }
+
+        Map<String, Object> usage = getProcessResourceUsage(pid);
+        if (!usage.isEmpty()) {
+            PROCESS_INFO_CACHE.put(pid, new CachedProcessInfo(new HashMap<>(usage), now));
+        } else {
+            PROCESS_INFO_CACHE.remove(pid);
+        }
+
+        return usage;
+    }
+
+    /**
+     * 控制台消息派发任务
+     */
+    private record ConsoleDispatchMessage(SimpMessagingTemplate messagingTemplate, Integer serverId,
+                                          Map<String, Object> payload) {
+
+        private void dispatch() {
+            messagingTemplate.convertAndSend(TOPIC_CONSOLE + serverId, payload);
+        }
     }
 
     /**
@@ -2110,5 +2182,11 @@ public class ServerController {
         } catch (Exception e) {
             log.debug("Unix 进程信息获取失败: {}", e.getMessage());
         }
+    }
+
+    /**
+     * 缓存的进程信息
+     */
+    private record CachedProcessInfo(Map<String, Object> data, long timestamp) {
     }
 }

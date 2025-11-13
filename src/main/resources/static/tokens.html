@@ -1,0 +1,774 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta content="width=device-width, initial-scale=1.0" name="viewport">
+    <title>Endless Node - Token 管理</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: #333;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 40px;
+            color: white;
+        }
+
+        .header h1 {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+            text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+        }
+
+        .header p {
+            font-size: 1.1rem;
+            opacity: 0.9;
+        }
+
+        .card {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            padding: 30px;
+            margin-bottom: 30px;
+        }
+
+        .card h2 {
+            color: #2d3748;
+            margin-bottom: 20px;
+            font-size: 1.5rem;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #4a5568;
+        }
+
+        .form-group input,
+        .form-group select {
+            width: 100%;
+            padding: 12px 16px;
+            border: 2px solid #e2e8f0;
+            border-radius: 8px;
+            font-size: 16px;
+            transition: border-color 0.3s ease;
+        }
+
+        .form-group input:focus,
+        .form-group select:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        .btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+            margin-right: 10px;
+            margin-bottom: 10px;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-danger {
+            background: linear-gradient(135deg, #f56565 0%, #e53e3e 100%);
+        }
+
+        .btn-danger:hover {
+            box-shadow: 0 4px 12px rgba(245, 101, 101, 0.4);
+        }
+
+        .btn-success {
+            background: linear-gradient(135deg, #48bb78 0%, #38a169 100%);
+        }
+
+        .btn-success:hover {
+            box-shadow: 0 4px 12px rgba(72, 187, 120, 0.4);
+        }
+
+        .token-list {
+            margin-top: 20px;
+        }
+
+        .token-item {
+            background: #f7fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 15px;
+            transition: all 0.3s ease;
+        }
+
+        .token-item:hover {
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+            transform: translateY(-2px);
+        }
+
+        .token-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+
+        .token-value {
+            font-family: 'Courier New', monospace;
+            background: #2d3748;
+            color: #68d391;
+            padding: 8px 12px;
+            border-radius: 4px;
+            font-size: 14px;
+            word-break: break-all;
+            margin-bottom: 10px;
+        }
+
+        .token-info {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 15px;
+        }
+
+        .info-item {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .info-label {
+            font-size: 12px;
+            color: #718096;
+            margin-bottom: 4px;
+            text-transform: uppercase;
+            font-weight: 600;
+        }
+
+        .info-value {
+            font-size: 14px;
+            color: #2d3748;
+        }
+
+        .status-badge {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .status-active {
+            background: #c6f6d5;
+            color: #22543d;
+        }
+
+        .status-expired {
+            background: #fed7d7;
+            color: #742a2a;
+        }
+
+        .status-permanent {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            font-weight: bold;
+        }
+
+        .node-status {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            margin-left: 8px;
+        }
+
+        .node-status-online {
+            background: #c6f6d5;
+            color: #22543d;
+        }
+
+        .node-status-offline {
+            background: #fed7d7;
+            color: #742a2a;
+        }
+
+        .node-status-deleted {
+            background: #e2e8f0;
+            color: #4a5568;
+        }
+
+        .node-status-unbound {
+            background: #fef5e7;
+            color: #744210;
+        }
+
+        .node-info {
+            background: #f7fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 15px;
+            margin-top: 15px;
+        }
+
+        .node-info h4 {
+            color: #2d3748;
+            margin-bottom: 10px;
+            font-size: 14px;
+        }
+
+        .node-details {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 10px;
+        }
+
+        .node-detail-item {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .node-detail-label {
+            font-size: 11px;
+            color: #718096;
+            margin-bottom: 2px;
+            text-transform: uppercase;
+            font-weight: 600;
+        }
+
+        .node-detail-value {
+            font-size: 13px;
+            color: #2d3748;
+            font-weight: 500;
+        }
+
+        .actions {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .btn-small {
+            padding: 6px 12px;
+            font-size: 12px;
+        }
+
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 20px;
+        }
+
+        .spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 10px;
+        }
+
+        @keyframes spin {
+            0% {
+                transform: rotate(0deg);
+            }
+            100% {
+                transform: rotate(360deg);
+            }
+        }
+
+        .alert {
+            padding: 12px 16px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            display: none;
+        }
+
+        .alert-success {
+            background: #c6f6d5;
+            color: #22543d;
+            border: 1px solid #9ae6b4;
+        }
+
+        .alert-error {
+            background: #fed7d7;
+            color: #742a2a;
+            border: 1px solid #feb2b2;
+        }
+
+        .copy-btn {
+            background: #4299e1;
+            color: white;
+            border: none;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            cursor: pointer;
+            margin-left: 8px;
+        }
+
+        .copy-btn:hover {
+            background: #3182ce;
+        }
+
+        /* 永久Token选项样式 */
+        #permanentToken {
+            transform: scale(1.2);
+            margin-right: 8px;
+        }
+
+        #permanentToken:checked + span {
+            color: #667eea;
+            font-weight: 600;
+        }
+
+        #expiresDays:disabled {
+            background: #f7fafc;
+            color: #a0aec0;
+            cursor: not-allowed;
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                padding: 10px;
+            }
+
+            .header h1 {
+                font-size: 2rem;
+            }
+
+            .token-info {
+                grid-template-columns: 1fr;
+            }
+
+            .actions {
+                flex-direction: column;
+            }
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <div class="header">
+        <h1>🚀 Endless Node</h1>
+        <p>Token 管理中心</p>
+        <div id="userInfo" style="margin-top: 15px; display: none;">
+            <span id="welcomeText"></span>
+            <button class="btn btn-small" id="changePasswordBtn" style="margin-left: 10px;">修改密码</button>
+            <button class="btn btn-small" id="logoutBtn" style="margin-left: 10px;">登出</button>
+        </div>
+    </div>
+
+    <div class="alert alert-success" id="successAlert"></div>
+    <div class="alert alert-error" id="errorAlert"></div>
+
+    <!-- 创建新Token -->
+    <div class="card">
+        <h2>创建新 Token</h2>
+        <form id="createTokenForm">
+            <div class="form-group">
+                <label for="scope">权限范围:</label>
+                <select id="scope" name="scope">
+                    <option value="SERVER_CONTROL,FILE_MANAGE">服务器控制 + 文件管理</option>
+                    <option value="SERVER_CONTROL">仅服务器控制</option>
+                    <option value="FILE_MANAGE">仅文件管理</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="expiresDays">有效期:</label>
+                <div style="display: flex; gap: 10px; align-items: center;">
+                    <input id="expiresDays" max="365" min="1" name="expiresDays" style="flex: 1;" type="number"
+                           value="7">
+                    <label style="display: flex; align-items: center; gap: 5px; margin: 0; font-weight: normal;">
+                        <input id="permanentToken" name="permanentToken" type="checkbox">
+                        永久有效
+                    </label>
+                </div>
+            </div>
+            <div class="form-group">
+                <label for="remark">备注信息:</label>
+                <input id="remark" name="remark" placeholder="请输入Token用途说明（可选）" type="text">
+            </div>
+            <button class="btn btn-success" type="submit">创建 Token</button>
+        </form>
+    </div>
+
+    <!-- Token列表 -->
+    <div class="card">
+        <h2>Token 列表</h2>
+        <div class="loading" id="loading">
+            <div class="spinner"></div>
+            <p>加载中...</p>
+        </div>
+        <div class="token-list" id="tokenList">
+            <!-- Token列表将在这里动态加载 -->
+        </div>
+    </div>
+</div>
+
+<script>
+    // 显示消息
+    function showAlert(message, type = 'success') {
+        const alertId = type === 'success' ? 'successAlert' : 'errorAlert';
+        const alert = document.getElementById(alertId);
+        alert.textContent = message;
+        alert.style.display = 'block';
+        setTimeout(() => {
+            alert.style.display = 'none';
+        }, 3000);
+    }
+
+    // 复制到剪贴板
+    function copyToClipboard(text) {
+        navigator.clipboard.writeText(text).then(() => {
+            showAlert('Token已复制到剪贴板');
+        }).catch(() => {
+            showAlert('复制失败，请手动复制', 'error');
+        });
+    }
+
+    // 格式化日期
+    function formatDate(dateString) {
+        const date = new Date(dateString);
+        return date.toLocaleString('zh-CN');
+    }
+
+    // 检查token是否过期
+    function isExpired(expiresAt) {
+        // 如果过期时间是最大时间，表示永久Token
+        const maxTime = new Date(2099, 11, 31).getTime(); // 2099年12月31日作为永久Token的判断标准
+        if (new Date(expiresAt).getTime() > maxTime) {
+            return false; // 永久Token永不过期
+        }
+        return new Date(expiresAt) < new Date();
+    }
+
+    // 检查是否为永久Token
+    function isPermanentToken(expiresAt) {
+        const maxTime = new Date(2099, 11, 31).getTime(); // 2099年12月31日作为永久Token的判断标准
+        return new Date(expiresAt).getTime() > maxTime;
+    }
+
+    // 渲染token列表
+    function renderTokenList(tokens) {
+        const tokenList = document.getElementById('tokenList');
+
+        if (tokens.length === 0) {
+            tokenList.innerHTML = '<p style="text-align: center; color: #718096; padding: 40px;">暂无Token</p>';
+            return;
+        }
+
+        tokenList.innerHTML = tokens.map(token => {
+            const isExpiredToken = isExpired(token.expiresAt);
+            const isPermanent = isPermanentToken(token.expiresAt);
+            let statusClass, statusText;
+
+            if (isPermanent) {
+                statusClass = 'status-permanent';
+                statusText = '永久有效';
+            } else if (isExpiredToken) {
+                statusClass = 'status-expired';
+                statusText = '已过期';
+            } else {
+                statusClass = 'status-active';
+                statusText = '有效';
+            }
+
+            // 节点状态
+            let nodeStatusHtml = '';
+            if (token.isBound) {
+                const nodeStatusClass = `node-status-${token.nodeStatus.toLowerCase()}`;
+                const nodeStatusText = token.nodeStatus === 'ONLINE' ? '在线' :
+                    token.nodeStatus === 'OFFLINE' ? '离线' :
+                        token.nodeStatus === 'DELETED' ? '已删除' : '未知';
+                nodeStatusHtml = `<span class="node-status ${nodeStatusClass}">${nodeStatusText}</span>`;
+            } else {
+                nodeStatusHtml = `<span class="node-status node-status-unbound">未绑定</span>`;
+            }
+
+            // 节点信息
+            let nodeInfoHtml = '';
+            if (token.isBound) {
+                nodeInfoHtml = `
+                        <div class="node-info">
+                            <h4>绑定节点信息 ${nodeStatusHtml}</h4>
+                            <div class="node-details">
+                                <div class="node-detail-item">
+                                    <div class="node-detail-label">节点UUID</div>
+                                    <div class="node-detail-value">${token.nodeUuid || 'N/A'}</div>
+                                </div>
+                                <div class="node-detail-item">
+                                    <div class="node-detail-label">版本号</div>
+                                    <div class="node-detail-value">${token.nodeVersion || 'N/A'}</div>
+                                </div>
+                                <div class="node-detail-item">
+                                    <div class="node-detail-label">IP地址</div>
+                                    <div class="node-detail-value">${token.nodeIpAddress || 'N/A'}</div>
+                                </div>
+                                <div class="node-detail-item">
+                                    <div class="node-detail-label">协议版本</div>
+                                    <div class="node-detail-value">${token.nodeProtocolVersion || 'N/A'}</div>
+                                </div>
+                                <div class="node-detail-item">
+                                    <div class="node-detail-label">注册时间</div>
+                                    <div class="node-detail-value">${token.nodeRegisteredAt ? formatDate(token.nodeRegisteredAt) : 'N/A'}</div>
+                                </div>
+                                <div class="node-detail-item">
+                                    <div class="node-detail-label">最后通信</div>
+                                    <div class="node-detail-value">${token.nodeLastCommunication ? formatDate(token.nodeLastCommunication) : 'N/A'}</div>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+            } else {
+                nodeInfoHtml = `
+                        <div class="node-info">
+                            <h4>节点绑定状态 ${nodeStatusHtml}</h4>
+                            <p style="color: #718096; font-size: 14px; margin: 0;">此Token尚未被任何节点绑定使用</p>
+                        </div>
+                    `;
+            }
+
+            return `
+                    <div class="token-item">
+                        <div class="token-header">
+                            <h3>Token #${token.token.substring(0, 8)}...</h3>
+                            <span class="status-badge ${statusClass}">${statusText}</span>
+                        </div>
+                        <div class="token-value">
+                            ${token.token}
+                            <button class="copy-btn" onclick="copyToClipboard('${token.token}')">复制</button>
+                        </div>
+                        <div class="token-info">
+                            <div class="info-item">
+                                <div class="info-label">主控端ID</div>
+                                <div class="info-value">${token.masterId}</div>
+                            </div>
+                            <div class="info-item">
+                                <div class="info-label">权限范围</div>
+                                <div class="info-value">${token.scope}</div>
+                            </div>
+                            <div class="info-item">
+                                <div class="info-label">创建时间</div>
+                                <div class="info-value">${formatDate(token.createdAt)}</div>
+                            </div>
+                            <div class="info-item">
+                                <div class="info-label">过期时间</div>
+                                <div class="info-value">${isPermanent ? '永不过期' : formatDate(token.expiresAt)}</div>
+                            </div>
+                            ${token.remark ? `
+                            <div class="info-item" style="grid-column: 1 / -1;">
+                                <div class="info-label">备注</div>
+                                <div class="info-value">${token.remark}</div>
+                            </div>
+                            ` : ''}
+                        </div>
+                        ${nodeInfoHtml}
+                        <div class="actions">
+                            <button class="btn btn-small" onclick="verifyToken('${token.token}')">验证</button>
+                            <button class="btn btn-danger btn-small" onclick="deleteToken('${token.token}')">删除</button>
+                        </div>
+                    </div>
+                `;
+        }).join('');
+    }
+
+    // 加载token列表
+    async function loadTokens() {
+        const loading = document.getElementById('loading');
+        const tokenList = document.getElementById('tokenList');
+
+        loading.style.display = 'block';
+        tokenList.style.display = 'none';
+
+        try {
+            const response = await fetch('/api/tokens');
+            const tokens = await response.json();
+            renderTokenList(tokens);
+        } catch (error) {
+            showAlert('加载Token列表失败: ' + error.message, 'error');
+        } finally {
+            loading.style.display = 'none';
+            tokenList.style.display = 'block';
+        }
+    }
+
+    // 创建token
+    async function createToken(formData) {
+        try {
+            const response = await fetch('/api/tokens', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(formData)
+            });
+
+            if (response.ok) {
+                showAlert('Token创建成功');
+                loadTokens();
+            } else {
+                const error = await response.json();
+                showAlert('创建失败: ' + error.message, 'error');
+            }
+        } catch (error) {
+            showAlert('创建失败: ' + error.message, 'error');
+        }
+    }
+
+    // 验证token
+    async function verifyToken(token) {
+        try {
+            const response = await fetch(`/api/auth/verify?token=${encodeURIComponent(token)}`);
+            const result = await response.json();
+
+            if (result.valid) {
+                showAlert('Token验证成功');
+            } else {
+                showAlert('Token验证失败: ' + result.message, 'error');
+            }
+        } catch (error) {
+            showAlert('验证失败: ' + error.message, 'error');
+        }
+    }
+
+    // 删除token
+    async function deleteToken(token) {
+        if (!confirm('确定要删除这个Token吗？')) {
+            return;
+        }
+
+        try {
+            const response = await fetch(`/api/tokens/${encodeURIComponent(token)}`, {
+                method: 'DELETE'
+            });
+
+            if (response.ok) {
+                showAlert('Token删除成功');
+                loadTokens();
+            } else {
+                const error = await response.json();
+                showAlert('删除失败: ' + error.message, 'error');
+            }
+        } catch (error) {
+            showAlert('删除失败: ' + error.message, 'error');
+        }
+    }
+
+    // 处理永久Token选项
+    document.getElementById('permanentToken').addEventListener('change', function () {
+        const expiresDaysInput = document.getElementById('expiresDays');
+        if (this.checked) {
+            expiresDaysInput.disabled = true;
+            expiresDaysInput.value = '';
+        } else {
+            expiresDaysInput.disabled = false;
+            expiresDaysInput.value = '7';
+        }
+    });
+
+    // 表单提交处理
+    document.getElementById('createTokenForm').addEventListener('submit', function (e) {
+        e.preventDefault();
+
+        const isPermanent = document.getElementById('permanentToken').checked;
+        const formData = {
+            scope: document.getElementById('scope').value,
+            expiresDays: isPermanent ? -1 : parseInt(document.getElementById('expiresDays').value),
+            isPermanent: isPermanent,
+            remark: document.getElementById('remark').value
+        };
+
+        createToken(formData);
+    });
+
+    // 检查登录状态
+    async function checkLoginStatus() {
+        try {
+            const response = await fetch('/api/auth/check');
+            const result = await response.json();
+
+            if (result.loggedIn) {
+                // 已登录，显示用户信息
+                document.getElementById('userInfo').style.display = 'block';
+                document.getElementById('welcomeText').textContent = `欢迎，${result.username}`;
+                loadTokens();
+            } else {
+                // 未登录，跳转到登录页
+                window.location.href = '/login.html';
+            }
+        } catch (error) {
+            console.log('检查登录状态失败:', error);
+            // 如果检查失败，也跳转到登录页
+            window.location.href = '/login.html';
+        }
+    }
+
+    // 登出功能
+    async function logout() {
+        try {
+            const response = await fetch('/api/auth/logout', {
+                method: 'POST'
+            });
+
+            if (response.ok) {
+                showAlert('已登出');
+                setTimeout(() => {
+                    window.location.href = '/login.html';
+                }, 1000);
+            } else {
+                showAlert('登出失败', 'error');
+            }
+        } catch (error) {
+            showAlert('登出失败: ' + error.message, 'error');
+        }
+    }
+
+    // 修改密码功能
+    function changePassword() {
+        window.location.href = '/change-password.html';
+    }
+
+    // 页面加载时检查登录状态
+    document.addEventListener('DOMContentLoaded', function () {
+        checkLoginStatus();
+
+        // 绑定按钮事件
+        document.getElementById('logoutBtn').addEventListener('click', logout);
+        document.getElementById('changePasswordBtn').addEventListener('click', changePassword);
+    });
+</script>
+</body>
+</html>

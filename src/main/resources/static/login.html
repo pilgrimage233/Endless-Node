@@ -24,7 +24,7 @@
         .login-container {
             background: white;
             border-radius: 16px;
-            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
             padding: 40px;
             width: 100%;
             max-width: 400px;
@@ -134,8 +134,12 @@
         }
 
         @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
+            0% {
+                transform: rotate(0deg);
+            }
+            100% {
+                transform: rotate(360deg);
+            }
         }
 
         .back-link {
@@ -181,128 +185,131 @@
     </style>
 </head>
 <body>
-    <div class="login-container">
-        <div class="login-header">
-            <h1>🚀 Endless Node</h1>
-            <p>用户登录</p>
-        </div>
-
-        <div class="alert alert-success" id="successAlert"></div>
-        <div class="alert alert-error" id="errorAlert"></div>
-
-        <div class="demo-info">
-            <h4>默认管理员账户</h4>
-            <p>用户名: admin</p>
-            <p>密码: admin123</p>
-        </div>
-
-        <form id="loginForm">
-            <div class="form-group">
-                <label for="username">用户名:</label>
-                <input type="text" id="username" name="username" required autocomplete="username">
-            </div>
-            <div class="form-group">
-                <label for="password">密码:</label>
-                <input type="password" id="password" name="password" required autocomplete="current-password">
-            </div>
-            <button type="submit" class="btn" id="loginBtn">登录</button>
-        </form>
-
-        <div class="loading" id="loading">
-            <div class="spinner"></div>
-            <p>登录中...</p>
-        </div>
-
-        <div class="back-link">
-            <a href="/index.html">返回首页</a>
-        </div>
+<div class="login-container">
+    <div class="login-header">
+        <h1>🚀 Endless Node</h1>
+        <p>用户登录</p>
     </div>
 
-    <script>
-        // 显示消息
-        function showAlert(message, type = 'success') {
-            const alertId = type === 'success' ? 'successAlert' : 'errorAlert';
-            const alert = document.getElementById(alertId);
-            alert.textContent = message;
-            alert.style.display = 'block';
-            setTimeout(() => {
-                alert.style.display = 'none';
-            }, 3000);
-        }
+    <div class="alert alert-success" id="successAlert"></div>
+    <div class="alert alert-error" id="errorAlert"></div>
 
-        // 检查是否已登录
-        async function checkLoginStatus() {
-            try {
-                const response = await fetch('/api/auth/check');
-                const result = await response.json();
-                
-                if (result.loggedIn) {
-                    // 已登录，跳转到首页
-                    window.location.href = '/index.html';
-                }
-            } catch (error) {
-                console.log('检查登录状态失败:', error);
+    <div class="demo-info">
+        <h4>默认管理员账户</h4>
+        <p>用户名: admin</p>
+        <p>密码: admin123</p>
+    </div>
+
+    <form id="loginForm">
+        <div class="form-group">
+            <label for="username">用户名:</label>
+            <input autocomplete="username" id="username" name="username" required type="text">
+        </div>
+        <div class="form-group">
+            <label for="password">密码:</label>
+            <input autocomplete="current-password" id="password" name="password" required type="password">
+        </div>
+        <button class="btn" id="loginBtn" type="submit">登录</button>
+    </form>
+
+    <div class="loading" id="loading">
+        <div class="spinner"></div>
+        <p>登录中...</p>
+    </div>
+
+    <div class="back-link">
+        <a href="/tokens.html">密钥管理</a>
+    </div>
+    <div class="back-link">
+        <a href="/index.html">返回首页</a>
+    </div>
+</div>
+
+<script>
+    // 显示消息
+    function showAlert(message, type = 'success') {
+        const alertId = type === 'success' ? 'successAlert' : 'errorAlert';
+        const alert = document.getElementById(alertId);
+        alert.textContent = message;
+        alert.style.display = 'block';
+        setTimeout(() => {
+            alert.style.display = 'none';
+        }, 3000);
+    }
+
+    // 检查是否已登录
+    async function checkLoginStatus() {
+        try {
+            const response = await fetch('/api/auth/check');
+            const result = await response.json();
+
+            if (result.loggedIn) {
+                // 已登录，跳转到首页
+                window.location.href = '/tokens.html';
             }
+        } catch (error) {
+            console.log('检查登录状态失败:', error);
         }
+    }
 
-        // 登录处理
-        async function handleLogin(formData) {
-            const loading = document.getElementById('loading');
-            const loginBtn = document.getElementById('loginBtn');
-            
-            loading.style.display = 'block';
-            loginBtn.disabled = true;
+    // 登录处理
+    async function handleLogin(formData) {
+        const loading = document.getElementById('loading');
+        const loginBtn = document.getElementById('loginBtn');
 
-            try {
-                const response = await fetch('/api/auth/login', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify(formData)
-                });
+        loading.style.display = 'block';
+        loginBtn.disabled = true;
 
-                const result = await response.json();
+        try {
+            const response = await fetch('/api/auth/login', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(formData)
+            });
 
-                if (response.ok && result.success) {
-                    if (result.requirePasswordChange) {
-                        showAlert('首次登录，请设置新密码');
-                        setTimeout(() => {
-                            window.location.href = '/change-password.html';
-                        }, 1000);
-                    } else {
-                        showAlert('登录成功，正在跳转...');
-                        setTimeout(() => {
-                            window.location.href = '/index.html';
-                        }, 1000);
-                    }
+            const result = await response.json();
+
+            if (response.ok && result.success) {
+                if (result.requirePasswordChange) {
+                    showAlert('首次登录，请设置新密码');
+                    setTimeout(() => {
+                        window.location.href = '/change-password.html';
+                    }, 1000);
                 } else {
-                    showAlert(result.error || '登录失败', 'error');
+                    showAlert('登录成功，正在跳转...');
+                    setTimeout(() => {
+                        window.location.href = '/tokens.html';
+                    }, 1000);
                 }
-            } catch (error) {
-                showAlert('登录失败: ' + error.message, 'error');
-            } finally {
-                loading.style.display = 'none';
-                loginBtn.disabled = false;
+            } else {
+                showAlert(result.error || '登录失败', 'error');
             }
+        } catch (error) {
+            showAlert('登录失败: ' + error.message, 'error');
+        } finally {
+            loading.style.display = 'none';
+            loginBtn.disabled = false;
         }
+    }
 
-        // 表单提交处理
-        document.getElementById('loginForm').addEventListener('submit', function(e) {
-            e.preventDefault();
-            
-            const formData = {
-                username: document.getElementById('username').value,
-                password: document.getElementById('password').value
-            };
+    // 表单提交处理
+    document.getElementById('loginForm').addEventListener('submit', function (e) {
+        e.preventDefault();
 
-            handleLogin(formData);
-        });
+        const formData = {
+            username: document.getElementById('username').value,
+            password: document.getElementById('password').value
+        };
 
-        // 页面加载时检查登录状态
-        document.addEventListener('DOMContentLoaded', function() {
-            checkLoginStatus();
-        });
-    </script>
+        handleLogin(formData);
+    });
+
+    // 页面加载时检查登录状态
+    document.addEventListener('DOMContentLoaded', function () {
+        checkLoginStatus();
+    });
+</script>
 </body>
 </html>

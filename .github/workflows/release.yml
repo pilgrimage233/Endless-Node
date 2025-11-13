@@ -1,0 +1,73 @@
+name: Auto Release
+
+on:
+  push:
+    branches: [ master ]
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      # 检出代码
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # 设置 JDK 17 环境（Spring Boot 3.0 需要 Java 17+）
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: 'maven'
+
+      # 配置 Maven Settings
+      - name: Configure Maven Settings
+        run: |
+          mkdir -p ~/.m2
+          echo "<settings>
+            <mirrors>
+              <mirror>
+                <id>central</id>
+                <name>Maven Central</name>
+                <url>https://repo1.maven.org/maven2</url>
+                <mirrorOf>central</mirrorOf>
+              </mirror>
+            </mirrors>
+          </settings>" > ~/.m2/settings.xml
+
+      # 获取版本号
+      - name: Get Version
+        id: get-version
+        run: |
+          VERSION=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      # 构建项目
+      - name: Build Project
+        run: |
+          mvn -B clean package -DskipTests
+          cp target/Endless-Node-${{ steps.get-version.outputs.version }}.jar target/endless-node-${{ steps.get-version.outputs.version }}.jar
+
+      # 创建 Release
+      - name: Create Release
+        id: create-release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: v${{ steps.get-version.outputs.version }}
+          release_name: Endless-Node v${{ steps.get-version.outputs.version }}
+
+      # 上传 JAR 文件
+      - name: Upload JAR
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create-release.outputs.upload_url }}
+          asset_path: ./target/endless-node-${{ steps.get-version.outputs.version }}.jar
+          asset_name: endless-node-${{ steps.get-version.outputs.version }}.jar
+          asset_content_type: application/java-archive
