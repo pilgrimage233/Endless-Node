@@ -12,6 +12,8 @@ public class OperationType {
 
     public static final String CREATE_SERVER = "CREATE_SERVER";
 
+    public static final String UPDATE_SERVER = "UPDATE_SERVER";
+
     public static final String DELETE_SERVER = "DELETE_SERVER";
 
     public static final String START_SERVER = "START_SERVER";

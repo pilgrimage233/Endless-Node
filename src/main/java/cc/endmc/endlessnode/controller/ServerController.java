@@ -850,6 +850,119 @@ public class ServerController {
     }
 
     /**
+     * 更新服务器实例
+     *
+     * @param token    访问令牌
+     * @param serverId 服务器实例ID
+     * @param updates  更新的服务器信息
+     * @return 更新结果
+     */
+    @PutMapping("/{serverId}")
+    public ResponseEntity<Map<String, Object>> updateServer(
+            @RequestHeader(Node.Header.X_ENDLESS_TOKEN) String token,
+            @PathVariable Integer serverId,
+            @RequestBody ServerInstances updates) {
+
+        // 验证令牌
+        AccessTokens accessToken = validateToken(token);
+        if (accessToken == null) {
+            return ResponseEntity.status(401).body(Map.of("error", "无效的访问令牌"));
+        }
+
+        // 验证 serverId
+        if (serverId == null || serverId <= 0) {
+            return ResponseEntity.badRequest().body(Map.of("error", "无效的服务器ID"));
+        }
+
+        // 验证更新数据
+        if (updates == null) {
+            return ResponseEntity.badRequest().body(Map.of("error", "更新数据不能为空"));
+        }
+
+        // 获取服务器实例
+        ServerInstances server = serverInstancesService.getById(serverId);
+        if (server == null) {
+            return ResponseEntity.notFound().build();
+        }
+
+        // 检查权限
+        if (!hasServerPermission(server, accessToken)) {
+            return ResponseEntity.status(403).body(Map.of("error", "权限不足"));
+        }
+
+        // 使用锁防止并发操作同一服务器
+        synchronized (getServerLock(serverId)) {
+            // 检查服务器是否正在运行（运行中的服务器不允许修改某些配置）
+            boolean isRunning = Node.getRunningServers().containsKey(serverId);
+
+            try {
+                // 更新实例名称
+                if (updates.getInstanceName() != null && !updates.getInstanceName().trim().isEmpty()) {
+                    server.setInstanceName(updates.getInstanceName().trim());
+                }
+
+                // 更新文件路径（仅在服务器未运行时允许）
+                if (updates.getFilePath() != null && !updates.getFilePath().trim().isEmpty()) {
+                    if (isRunning) {
+                        return ResponseEntity.badRequest().body(Map.of("error", "无法修改运行中服务器的文件路径"));
+                    }
+                    server.setFilePath(updates.getFilePath().trim());
+                }
+
+                // 更新版本
+                if (updates.getVersion() != null && !updates.getVersion().trim().isEmpty()) {
+                    server.setVersion(updates.getVersion().trim());
+                }
+
+                // 更新核心类型
+                if (updates.getCoreType() != null && !updates.getCoreType().trim().isEmpty()) {
+                    server.setCoreType(updates.getCoreType().trim());
+                }
+
+                // 更新端口
+                if (updates.getPort() != null && updates.getPort() > 0 && updates.getPort() <= 65535) {
+                    server.setPort(updates.getPort());
+                }
+
+                // 更新内存配置
+                if (updates.getMemoryMb() != null && updates.getMemoryMb() > 0) {
+                    server.setMemoryMb(updates.getMemoryMb());
+                }
+
+                // 更新JVM参数
+                if (updates.getJvmArgs() != null) {
+                    server.setJvmArgs(updates.getJvmArgs().trim());
+                }
+
+                // 更新时间戳
+                server.setUpdatedAt(new Date());
+
+                // 保存更新
+                serverInstancesService.updateById(server);
+
+                // 记录操作日志
+                logOperation(accessToken.getMasterId(), OperationType.UPDATE_SERVER, true,
+                        Map.of("instanceId", serverId, "instanceName", server.getInstanceName()));
+
+                Map<String, Object> response = new HashMap<>();
+                response.put("success", true);
+                response.put("message", "服务器更新成功");
+                response.put("server", server);
+
+                return ResponseEntity.ok(response);
+            } catch (Exception e) {
+                log.error("更新服务器时发生错误: {}", serverId, e);
+
+                // 记录操作日志
+                logOperation(accessToken.getMasterId(), OperationType.UPDATE_SERVER, false,
+                        Map.of("instanceId", serverId, "instanceName", server.getInstanceName(), "error", e.getMessage()));
+
+                return ResponseEntity.status(500).body(Map.of("error", "更新服务器失败: " + e.getMessage()));
+            }
+        }
+    }
+
+    /**
      * 删除服务器实例
      *
      * @param token    访问令牌
@@ -1551,16 +1664,7 @@ public class ServerController {
             throw new IOException("工作目录路径不是一个目录: " + workingDir.getAbsolutePath());
         }
 
-        // 拆分命令字符串（比如 "java -Xmx2G -Xms2G -jar server.jar nogui"）
         String trimmedScript = script.trim();
-        List<String> commandParts = new ArrayList<>(Arrays.asList(trimmedScript.split("\\s+")));
-
-        // 移除空字符串
-        commandParts.removeIf(String::isEmpty);
-
-        if (commandParts.isEmpty()) {
-            throw new IllegalArgumentException("Start script contains no valid commands");
-        }
 
         // 获取操作系统类型
         String osName = System.getProperty("os.name");
@@ -1570,21 +1674,25 @@ public class ServerController {
 
         ProcessBuilder processBuilder;
         if (osName.toLowerCase().contains("windows")) {
-            // Windows 系统直接执行命令
-            processBuilder = new ProcessBuilder(commandParts);
+            List<String> windowsCommand = new ArrayList<>();
+            windowsCommand.add("cmd");
+            windowsCommand.add("/c");
+            windowsCommand.add("cd /d \"" + workingDir.getAbsolutePath() + "\" && " + trimmedScript);
+            processBuilder = new ProcessBuilder(windowsCommand);
         } else {
-            // Unix/Linux 系统使用 bash
             List<String> unixCommand = new ArrayList<>();
             unixCommand.add("bash");
             unixCommand.add("-c");
-            unixCommand.add(trimmedScript);
+            unixCommand.add("cd \"" + workingDir.getAbsolutePath() + "\" && " + trimmedScript);
             processBuilder = new ProcessBuilder(unixCommand);
         }
 
+        // 设置工作目录（双重保险）
         processBuilder.directory(workingDir);
         processBuilder.redirectErrorStream(true);
 
-        log.info("正在使用自定义脚本启动服务器 {}: {}", server.getId(), trimmedScript);
+        log.debug("正在使用自定义脚本启动服务器 {} (工作目录: {}): {}",
+                server.getId(), workingDir.getAbsolutePath(), trimmedScript);
 
         // 启动进程
         return processBuilder.start();
