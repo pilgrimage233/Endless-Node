@@ -1,11 +1,11 @@
 package cc.endmc.endlessnode.config;
 
-import cc.endmc.endlessnode.util.PasswordUtil;
 import cc.endmc.endlessnode.common.TokenCache;
 import cc.endmc.endlessnode.domain.AccessTokens;
 import cc.endmc.endlessnode.domain.Users;
 import cc.endmc.endlessnode.service.AccessTokensService;
 import cc.endmc.endlessnode.service.UsersService;
+import cc.endmc.endlessnode.util.PasswordUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.CommandLineRunner;
@@ -23,10 +23,15 @@ public class InitializationConfig {
 
     private final AccessTokensService accessTokensService;
     private final UsersService usersService;
+    private final InitConfigService initConfigService;
 
     @Bean
     public CommandLineRunner initializeOnStartup() {
         return args -> {
+            // 首先初始化配置文件
+            log.info("初始化配置文件...");
+            initConfigService.initializeConfigs();
+            
             log.info("Checking if initialization is needed...");
 
             // 检查是否已存在访问令牌

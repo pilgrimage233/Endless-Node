@@ -49,6 +49,38 @@ mvn clean package
 java -jar target/Endless-Node-0.0.1-SNAPSHOT.jar
 ```
 
+### 配置文件说明
+
+项目启动时会自动在当前目录下创建 `config` 文件夹，并生成 `application.yml` 配置文件。
+
+**配置文件生成规则：**
+
+- 首次启动：自动从 jar 包中复制配置文件到 `config/application.yml`
+- 后续启动：如果配置文件已存在，则不做任何修改
+
+**配置文件优先级：**
+
+- `config/application.yml` > jar 包内的 `application.yml`
+- 修改 `config/application.yml` 中的配置后重启生效
+
+**主要配置项：**
+
+```yaml
+# 服务器端口配置
+server:
+  port: 8085
+
+# 数据库配置（SQLite）
+spring:
+  datasource:
+    url: jdbc:sqlite:file:./node.db
+
+# 日志配置
+logging:
+  level:
+    cc.endmc: debug
+```
+
 ### 配置
 
 配置文件位于 `src/main/resources/application.yml`，可以根据需要修改以下配置：

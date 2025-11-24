@@ -15,8 +15,6 @@ import javax.swing.filechooser.FileSystemView;
 import java.io.File;
 import java.io.IOException;
 import java.net.MalformedURLException;
-import java.net.URL;
-import java.net.URLConnection;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -265,14 +263,32 @@ public class FileController {
             @RequestParam String path) {
         try {
             // 验证URL格式
-            URL fileUrl = new URL(url);
+            if (url == null || url.trim().isEmpty()) {
+                return ResponseEntity.badRequest().body(Map.of("error", "URL不能为空"));
+            }
 
-            // 打开连接获取文件名
-            URLConnection connection = fileUrl.openConnection();
-            String fileName = fileDownloadService.getFileNameFromUrl(url, connection);
+            // 验证URL协议
+            String lowerUrl = url.toLowerCase().trim();
+            if (!lowerUrl.startsWith("http://") && !lowerUrl.startsWith("https://")) {
+                return ResponseEntity.badRequest().body(Map.of("error", "仅支持HTTP和HTTPS协议"));
+            }
+
+            // 验证路径
+            if (path == null || path.trim().isEmpty()) {
+                return ResponseEntity.badRequest().body(Map.of("error", "保存路径不能为空"));
+            }
 
             // 构建目标路径
             Path targetPath = Paths.get(path);
+
+            // 验证目标路径是否可写
+            Path parentPath = targetPath.getParent();
+            if (parentPath != null && Files.exists(parentPath) && !Files.isWritable(parentPath)) {
+                return ResponseEntity.status(403).body(Map.of("error", "目标路径不可写"));
+            }
+
+            // 获取文件名（先尝试从URL获取，下载时会根据响应头更新）
+            String fileName = fileDownloadService.extractFileNameFromUrl(url);
 
             // 如果目标是目录，则添加文件名
             if (Files.isDirectory(targetPath) || !targetPath.toString().contains(".")) {
@@ -280,16 +296,22 @@ public class FileController {
             }
 
             // 异步开始下载
-            fileDownloadService.downloadFileAsync(url, targetPath.toString(), fileName);
+            fileDownloadService.downloadFileAsync(url, targetPath.toString());
 
             Map<String, Object> response = new HashMap<>();
             response.put("success", true);
-            response.put("message", "Download started");
+            response.put("message", "下载任务已启动");
             response.put("targetPath", targetPath.toString());
             response.put("fileName", fileName);
             response.put("url", url);
 
             return ResponseEntity.ok(response);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of(
+                    "error", "参数错误: " + e.getMessage(),
+                    "url", url,
+                    "path", path
+            ));
         } catch (Exception e) {
             return ResponseEntity.status(500).body(Map.of(
                     "error", "文件下载失败: " + e.getMessage(),

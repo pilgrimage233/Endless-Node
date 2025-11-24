@@ -19,11 +19,7 @@ import oshi.util.Util;
 
 import java.lang.management.ManagementFactory;
 import java.lang.management.RuntimeMXBean;
-import java.util.ArrayList;
-import java.util.Date;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -470,7 +466,7 @@ public class SystemController {
 
         // 统计运行状态
         long runningCount = allInstances.stream()
-                .filter(instance -> "running".equals(instance.getStatus()))
+                .filter(instance -> "RUNNING".equals(instance.getStatus()))
                 .count();
         stats.setRunningInstances((int) runningCount);
         stats.setStoppedInstances(allInstances.size() - (int) runningCount);

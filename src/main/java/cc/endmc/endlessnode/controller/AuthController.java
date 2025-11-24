@@ -140,7 +140,7 @@ public class AuthController {
         response.put("success", true);
         response.put("message", "节点注册成功");
         response.put("nodeUuid", newNode.getUuid());
-        response.put("version", newNode.getVersion());
+        response.put("version", version);
 
         // 获取主机系统
         String osType = System.getProperty("os.name");
@@ -156,6 +156,7 @@ public class AuthController {
      * @return 注销结果
      */
     @PostMapping("/unregister")
+    @Transactional
     public ResponseEntity<Map<String, Object>> unregister(@RequestBody Map<String, String> request) {
         String uuid = request.get("uuid");
         String secretKey = request.get("secretKey");
@@ -178,7 +179,24 @@ public class AuthController {
         // 标记为已删除
         existingNode.setIsDeleted(1);
         existingNode.setLastCommunication(new Date());
-        masterNodesService.updateById(existingNode);
+        boolean masterUpdated = masterNodesService.updateById(existingNode);
+
+        // 解绑访问令牌
+        AccessTokens token = accessTokensService.lambdaQuery()
+                .eq(AccessTokens::getToken, secretKey)
+                .eq(AccessTokens::getMasterUuid, uuid)
+                .one();
+
+        boolean tokenUpdated = true;
+        if (token != null) {
+            token.setMasterUuid(null);
+            token.setMasterId(null);
+            tokenUpdated = accessTokensService.updateById(token);
+        }
+
+        if (!masterUpdated || !tokenUpdated) {
+            return ResponseEntity.status(500).body(Map.of("error", "节点注销失败"));
+        }
 
         Map<String, Object> response = new HashMap<>();
         response.put("success", true);
