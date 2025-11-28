@@ -394,6 +394,31 @@ public class SystemController {
     }
 
     /**
+     * 测试连接接口
+     * 主控端调用此接口测试与节点的连接
+     *
+     * @return 测试结果
+     */
+    @GetMapping("/test-connection")
+    public ResponseEntity<Map<String, Object>> testConnection() {
+        Map<String, Object> response = new HashMap<>();
+
+        try {
+            response.put("success", true);
+            response.put("message", "连接成功");
+            response.put("version", nodeVersion);
+            response.put("timestamp", new Date());
+            response.put("status", "ONLINE");
+
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            response.put("success", false);
+            response.put("message", "连接测试失败: " + e.getMessage());
+            return ResponseEntity.internalServerError().body(response);
+        }
+    }
+
+    /**
      * 心跳检测接口
      * 主控端调用此接口获取节点状态信息
      *

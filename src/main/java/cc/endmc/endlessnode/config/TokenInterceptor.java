@@ -2,6 +2,7 @@ package cc.endmc.endlessnode.config;
 
 import cc.endmc.endlessnode.common.TokenCache;
 import cc.endmc.endlessnode.domain.AccessTokens;
+import cc.endmc.endlessnode.manage.Node;
 import cc.endmc.endlessnode.service.AccessTokensService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -24,7 +25,6 @@ import java.util.Date;
 @RequiredArgsConstructor
 public class TokenInterceptor implements HandlerInterceptor {
 
-    private static final String TOKEN_HEADER = "X-Endless-Token";
     private final AccessTokensService accessTokensService;
 
     @Override
@@ -95,7 +95,8 @@ public class TokenInterceptor implements HandlerInterceptor {
                 requestURI.startsWith("/api/file") ||
                 requestURI.startsWith("/api/websocket") ||
                 requestURI.startsWith("/api/node") ||
-                requestURI.startsWith("/api/system");
+                requestURI.startsWith("/api/system") ||
+                requestURI.startsWith("/api/java-env");
     }
 
     /**
@@ -117,7 +118,7 @@ public class TokenInterceptor implements HandlerInterceptor {
      * 处理节点API的Token认证
      */
     private boolean handleTokenAuthentication(HttpServletRequest request, HttpServletResponse response) throws Exception {
-        String token = request.getHeader(TOKEN_HEADER);
+        String token = request.getHeader(Node.Header.X_ENDLESS_TOKEN);
         if (token == null || token.isEmpty()) {
             response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
             response.setContentType("application/json");
