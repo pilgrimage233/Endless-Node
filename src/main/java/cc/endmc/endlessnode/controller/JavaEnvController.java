@@ -4,10 +4,12 @@ package cc.endmc.endlessnode.controller;
 import cc.endmc.endlessnode.domain.AccessTokens;
 import cc.endmc.endlessnode.manage.Node;
 import cc.endmc.endlessnode.service.AccessTokensService;
+import cc.endmc.endlessnode.util.JavaDownloadUrlProvider;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.BufferedReader;
 import java.io.File;
@@ -477,6 +479,512 @@ public class JavaEnvController {
                 scanDirectory(subDir, environments, scannedPaths, depth - 1);
             }
         }
+    }
+
+    /**
+     * 一键安装Java环境（流式响应）
+     */
+    @PostMapping("/install")
+    public SseEmitter installJava(
+            @RequestHeader(Node.Header.X_ENDLESS_TOKEN) String token,
+            @RequestBody Map<String, Object> request) {
+
+        // 验证令牌
+        AccessTokens accessToken = validateToken(token);
+        if (accessToken == null) {
+            SseEmitter emitter =
+                    new SseEmitter();
+            try {
+                emitter.send(SseEmitter.event()
+                        .data(Map.of("error", "无效的访问令牌", "success", false)));
+                emitter.complete();
+            } catch (Exception e) {
+                emitter.completeWithError(e);
+            }
+            return emitter;
+        }
+
+        String version = (String) request.get("version");
+        String installPath = (String) request.get("installPath");
+        String vendor = (String) request.getOrDefault("vendor", "Adoptium");
+
+        if (version == null || version.trim().isEmpty() || installPath == null || installPath.trim().isEmpty()) {
+            SseEmitter emitter =
+                    new SseEmitter();
+            try {
+                emitter.send(SseEmitter.event()
+                        .data(Map.of("error", "参数不完整", "success", false)));
+                emitter.complete();
+            } catch (Exception e) {
+                emitter.completeWithError(e);
+            }
+            return emitter;
+        }
+
+        // 创建SSE发射器，超时时间10分钟
+        SseEmitter emitter =
+                new SseEmitter(600000L);
+
+        // 异步执行安装
+        new Thread(() -> {
+            try {
+                log.info("开始安装Java {} ({}), 安装路径: {}", version, vendor, installPath);
+                installJavaEnvironmentWithProgress(version, installPath, vendor, emitter);
+            } catch (Exception e) {
+                log.error("安装Java环境失败", e);
+                try {
+                    emitter.send(SseEmitter.event()
+                            .data(Map.of(
+                                    "type", "error",
+                                    "message", "安装失败: " + e.getMessage(),
+                                    "success", false
+                            )));
+                    emitter.complete();
+                } catch (Exception ex) {
+                    emitter.completeWithError(ex);
+                }
+            }
+        }).start();
+
+        return emitter;
+    }
+
+    /**
+     * 安装Java环境（带进度推送）
+     */
+    private void installJavaEnvironmentWithProgress(String version, String installPath, String vendor,
+                                                    SseEmitter emitter) throws Exception {
+
+        try {
+            // 1. 创建安装目录
+            sendProgress(emitter, "info", "正在创建安装目录...", 10);
+            File installDir = new File(installPath);
+            if (!installDir.exists()) {
+                if (!installDir.mkdirs()) {
+                    throw new Exception("无法创建安装目录: " + installPath);
+                }
+            }
+
+            String os = System.getProperty("os.name").toLowerCase();
+            String arch = System.getProperty("os.arch").toLowerCase();
+
+            String normalizedArch;
+            if (arch.contains("amd64") || arch.contains("x86_64")) {
+                normalizedArch = "x64";
+            } else if (arch.contains("aarch64") || arch.contains("arm64")) {
+                normalizedArch = "aarch64";
+            } else {
+                normalizedArch = "x86";
+            }
+
+            // 2. 获取下载URL
+            sendProgress(emitter, "info", "正在获取下载链接...", 20);
+            String downloadUrl = getJavaDownloadUrl(version, vendor, os, normalizedArch);
+            if (downloadUrl == null) {
+                throw new Exception("不支持的Java版本或平台");
+            }
+
+            log.info("下载URL: {}", downloadUrl);
+
+            // 3. 下载文件
+            sendProgress(emitter, "info", "开始下载Java安装包...", 30);
+            File downloadFile = downloadJavaPackageWithProgress(downloadUrl, installDir, version, emitter);
+
+            // 4. 解压文件
+            sendProgress(emitter, "info", "开始解压安装包...", 70);
+            File extractedDir = extractJavaPackage(downloadFile, installDir);
+            log.info("解压完成: {}", extractedDir.getAbsolutePath());
+
+            // 5. 验证安装
+            sendProgress(emitter, "info", "正在验证安装...", 90);
+            Map<String, Object> verifyResult = verifyAndGetJavaInfo(extractedDir.getAbsolutePath());
+            if (verifyResult != null && Boolean.TRUE.equals(verifyResult.get("valid"))) {
+                // 删除下载的压缩包
+                if (downloadFile.exists()) {
+                    downloadFile.delete();
+                }
+
+                log.info("Java {} 安装成功", version);
+
+                Map<String, Object> result = new HashMap<>();
+                result.put("success", true);
+                result.put("javaHome", extractedDir.getAbsolutePath());
+                result.put("version", verifyResult.get("version"));
+                result.put("vendor", verifyResult.get("vendor"));
+                result.put("type", verifyResult.get("type"));
+                result.put("arch", verifyResult.get("arch"));
+
+                sendProgress(emitter, "success", "安装完成！", 100, result);
+                emitter.complete();
+            } else {
+                throw new Exception("Java安装验证失败");
+            }
+        } catch (Exception e) {
+            sendProgress(emitter, "error", "安装失败: " + e.getMessage(), 0);
+            emitter.complete();
+            throw e;
+        }
+    }
+
+    /**
+     * 发送进度信息
+     */
+    private void sendProgress(SseEmitter emitter,
+                              String type, String message, int progress) {
+        sendProgress(emitter, type, message, progress, null);
+    }
+
+    /**
+     * 发送进度信息（带数据）
+     */
+    private void sendProgress(SseEmitter emitter,
+                              String type, String message, int progress, Map<String, Object> data) {
+        try {
+            Map<String, Object> event = new HashMap<>();
+            event.put("type", type);
+            event.put("message", message);
+            event.put("progress", progress);
+            if (data != null) {
+                event.putAll(data);
+            }
+            emitter.send(SseEmitter.event()
+                    .data(event));
+            log.info("[{}%] {}", progress, message);
+        } catch (Exception e) {
+            log.error("发送进度失败", e);
+        }
+    }
+
+    /**
+     * 安装Java环境（原方法保留，用于非流式调用）
+     */
+    private Map<String, Object> installJavaEnvironment(String version, String installPath, String vendor) throws Exception {
+        Map<String, Object> result = new HashMap<>();
+
+        // 创建安装目录
+        File installDir = new File(installPath);
+        if (!installDir.exists()) {
+            if (!installDir.mkdirs()) {
+                throw new Exception("无法创建安装目录: " + installPath);
+            }
+        }
+
+        String os = System.getProperty("os.name").toLowerCase();
+        String arch = System.getProperty("os.arch").toLowerCase();
+
+        // 标准化架构名称
+        String normalizedArch;
+        if (arch.contains("amd64") || arch.contains("x86_64")) {
+            normalizedArch = "x64";
+        } else if (arch.contains("aarch64") || arch.contains("arm64")) {
+            normalizedArch = "aarch64";
+        } else {
+            normalizedArch = "x86";
+        }
+
+        // 根据供应商获取下载URL
+        String downloadUrl = getJavaDownloadUrl(version, vendor, os, normalizedArch);
+        if (downloadUrl == null) {
+            throw new Exception("不支持的Java版本或平台");
+        }
+
+        log.info("下载URL: {}", downloadUrl);
+        result.put("downloadUrl", downloadUrl);
+
+        // 下载文件 - 先创建临时文件，从响应头获取真实文件名
+        log.info("开始下载Java安装包...");
+        File downloadFile = downloadJavaPackage(downloadUrl, installDir, version);
+
+        result.put("downloadFile", downloadFile.getAbsolutePath());
+        log.info("下载完成");
+
+        // 解压文件
+        log.info("开始解压...");
+        File extractedDir = extractJavaPackage(downloadFile, installDir);
+        result.put("extractedDir", extractedDir.getAbsolutePath());
+        log.info("解压完成: {}", extractedDir.getAbsolutePath());
+
+        // 验证安装
+        Map<String, Object> verifyResult = verifyAndGetJavaInfo(extractedDir.getAbsolutePath());
+        if (verifyResult != null && Boolean.TRUE.equals(verifyResult.get("valid"))) {
+            result.put("success", true);
+            result.put("javaHome", extractedDir.getAbsolutePath());
+            result.put("version", verifyResult.get("version"));
+            result.put("vendor", verifyResult.get("vendor"));
+            result.put("type", verifyResult.get("type"));
+            result.put("arch", verifyResult.get("arch"));
+
+            // 删除下载的压缩包
+            if (downloadFile.exists()) {
+                downloadFile.delete();
+            }
+
+            log.info("Java {} 安装成功", version);
+        } else {
+            throw new Exception("Java安装验证失败");
+        }
+
+        return result;
+    }
+
+    /**
+     * 获取Java下载URL
+     */
+    private String getJavaDownloadUrl(String version, String vendor, String os, String arch) {
+        return JavaDownloadUrlProvider.getDownloadUrl(version, vendor, os, arch);
+    }
+
+    /**
+     * 下载Java安装包（带进度推送）
+     */
+    private File downloadJavaPackageWithProgress(String url, File installDir, String version,
+                                                 SseEmitter emitter) throws Exception {
+        java.net.URL downloadUrl = new java.net.URL(url);
+        java.net.HttpURLConnection connection = (java.net.HttpURLConnection) downloadUrl.openConnection();
+        connection.setRequestMethod("GET");
+        connection.setConnectTimeout(30000);
+        connection.setReadTimeout(300000);
+        connection.setInstanceFollowRedirects(true);
+
+        try {
+            connection.connect();
+
+            String fileName = null;
+            String contentDisposition = connection.getHeaderField("Content-Disposition");
+            if (contentDisposition != null && contentDisposition.contains("filename=")) {
+                int index = contentDisposition.indexOf("filename=");
+                if (index > 0) {
+                    fileName = contentDisposition.substring(index + 9);
+                    fileName = fileName.replaceAll("\"", "").trim();
+                }
+            }
+
+            if (fileName == null || fileName.isEmpty()) {
+                String os = System.getProperty("os.name").toLowerCase();
+                String extension = os.contains("win") ? "zip" : "tar.gz";
+                fileName = "jdk-" + version + "." + extension;
+            }
+
+            fileName = fileName.replaceAll("[^a-zA-Z0-9._-]", "_");
+
+            File targetFile = new File(installDir, fileName);
+            log.info("下载Java安装包到: {}", targetFile.getAbsolutePath());
+
+            try (java.io.InputStream in = connection.getInputStream();
+                 java.io.FileOutputStream out = new java.io.FileOutputStream(targetFile)) {
+
+                byte[] buffer = new byte[8192];
+                int bytesRead;
+                long totalBytesRead = 0;
+                long fileSize = connection.getContentLengthLong();
+                long lastProgressTime = System.currentTimeMillis();
+                int lastProgress = 30;
+
+                while ((bytesRead = in.read(buffer)) != -1) {
+                    out.write(buffer, 0, bytesRead);
+                    totalBytesRead += bytesRead;
+
+                    // 每2秒更新一次进度
+                    long currentTime = System.currentTimeMillis();
+                    if (currentTime - lastProgressTime > 2000) {
+                        if (fileSize > 0) {
+                            // 下载进度占30%-70%
+                            int downloadProgress = (int) ((totalBytesRead * 40) / fileSize);
+                            int currentProgress = 30 + downloadProgress;
+
+                            String progressMsg = String.format("下载中... %d%% (%d MB / %d MB)",
+                                    (int) ((totalBytesRead * 100) / fileSize),
+                                    totalBytesRead / (1024 * 1024),
+                                    fileSize / (1024 * 1024));
+
+                            sendProgress(emitter, "info", progressMsg, currentProgress);
+                            lastProgress = currentProgress;
+                        } else {
+                            String progressMsg = String.format("已下载: %d MB", totalBytesRead / (1024 * 1024));
+                            sendProgress(emitter, "info", progressMsg, lastProgress);
+                        }
+                        lastProgressTime = currentTime;
+                    }
+                }
+
+                log.info("下载完成，总大小: {} MB", totalBytesRead / (1024 * 1024));
+            }
+
+            return targetFile;
+        } finally {
+            connection.disconnect();
+        }
+    }
+
+    /**
+     * 下载Java安装包（原方法保留）
+     */
+    private File downloadJavaPackage(String url, File installDir, String version) throws Exception {
+        java.net.URL downloadUrl = new java.net.URL(url);
+        java.net.HttpURLConnection connection = (java.net.HttpURLConnection) downloadUrl.openConnection();
+        connection.setRequestMethod("GET");
+        connection.setConnectTimeout(30000);
+        connection.setReadTimeout(300000); // 5分钟超时
+        connection.setInstanceFollowRedirects(true);
+
+        try {
+            connection.connect();
+
+            // 从响应头获取文件名
+            String fileName = null;
+            String contentDisposition = connection.getHeaderField("Content-Disposition");
+            if (contentDisposition != null && contentDisposition.contains("filename=")) {
+                // 提取 filename="xxx" 或 filename=xxx
+                int index = contentDisposition.indexOf("filename=");
+                if (index > 0) {
+                    fileName = contentDisposition.substring(index + 9);
+                    fileName = fileName.replaceAll("\"", "").trim();
+                }
+            }
+
+            // 如果没有从响应头获取到，使用默认文件名
+            if (fileName == null || fileName.isEmpty()) {
+                String os = System.getProperty("os.name").toLowerCase();
+                String extension = os.contains("win") ? "zip" : "tar.gz";
+                fileName = "jdk-" + version + "." + extension;
+            }
+
+            // 确保文件名安全（移除非法字符）
+            fileName = fileName.replaceAll("[^a-zA-Z0-9._-]", "_");
+
+            File targetFile = new File(installDir, fileName);
+            log.info("下载Java安装包到: {}", targetFile.getAbsolutePath());
+
+            try (java.io.InputStream in = connection.getInputStream();
+                 java.io.FileOutputStream out = new java.io.FileOutputStream(targetFile)) {
+
+                byte[] buffer = new byte[8192];
+                int bytesRead;
+                long totalBytesRead = 0;
+                long fileSize = connection.getContentLengthLong();
+                long lastLogTime = System.currentTimeMillis();
+
+                while ((bytesRead = in.read(buffer)) != -1) {
+                    out.write(buffer, 0, bytesRead);
+                    totalBytesRead += bytesRead;
+
+                    // 每5秒打印一次进度
+                    long currentTime = System.currentTimeMillis();
+                    if (currentTime - lastLogTime > 5000) {
+                        if (fileSize > 0) {
+                            int progress = (int) ((totalBytesRead * 100) / fileSize);
+                            log.info("下载进度: {}% ({} MB / {} MB)",
+                                    progress,
+                                    totalBytesRead / (1024 * 1024),
+                                    fileSize / (1024 * 1024));
+                        } else {
+                            log.info("已下载: {} MB", totalBytesRead / (1024 * 1024));
+                        }
+                        lastLogTime = currentTime;
+                    }
+                }
+                
+                log.info("下载完成，总大小: {} MB", totalBytesRead / (1024 * 1024));
+            }
+
+            return targetFile;
+        } finally {
+            connection.disconnect();
+        }
+    }
+
+    /**
+     * 解压Java安装包
+     */
+    private File extractJavaPackage(File packageFile, File targetDir) throws Exception {
+        String fileName = packageFile.getName().toLowerCase();
+
+        if (fileName.endsWith(".zip")) {
+            return extractZip(packageFile, targetDir);
+        } else if (fileName.endsWith(".tar.gz") || fileName.endsWith(".tgz")) {
+            return extractTarGz(packageFile, targetDir);
+        } else {
+            throw new Exception("不支持的压缩格式: " + fileName);
+        }
+    }
+
+    /**
+     * 解压ZIP文件
+     */
+    private File extractZip(File zipFile, File targetDir) throws Exception {
+        File extractedDir = null;
+
+        try (java.util.zip.ZipInputStream zis = new java.util.zip.ZipInputStream(
+                new java.io.FileInputStream(zipFile))) {
+
+            java.util.zip.ZipEntry entry;
+            while ((entry = zis.getNextEntry()) != null) {
+                File file = new File(targetDir, entry.getName());
+
+                // 记录第一个目录作为Java主目录
+                if (extractedDir == null && entry.isDirectory()) {
+                    extractedDir = file;
+                }
+
+                if (entry.isDirectory()) {
+                    file.mkdirs();
+                } else {
+                    file.getParentFile().mkdirs();
+                    try (java.io.FileOutputStream fos = new java.io.FileOutputStream(file)) {
+                        byte[] buffer = new byte[8192];
+                        int len;
+                        while ((len = zis.read(buffer)) > 0) {
+                            fos.write(buffer, 0, len);
+                        }
+                    }
+
+                    // 在Unix系统上设置可执行权限
+                    if (!System.getProperty("os.name").toLowerCase().contains("win")) {
+                        if (file.getName().equals("java") || file.getName().equals("javac")) {
+                            file.setExecutable(true);
+                        }
+                    }
+                }
+                zis.closeEntry();
+            }
+        }
+
+        return extractedDir;
+    }
+
+    /**
+     * 解压TAR.GZ文件
+     */
+    private File extractTarGz(File tarGzFile, File targetDir) throws Exception {
+        // 注意：这需要Apache Commons Compress库
+        // 如果没有该库，可以使用系统命令解压
+        String os = System.getProperty("os.name").toLowerCase();
+        if (os.contains("win")) {
+            throw new Exception("Windows系统不支持tar.gz格式，请使用zip格式");
+        }
+
+        // 使用系统命令解压
+        ProcessBuilder pb = new ProcessBuilder("tar", "-xzf", tarGzFile.getAbsolutePath(), "-C", targetDir.getAbsolutePath());
+        Process process = pb.start();
+        int exitCode = process.waitFor();
+
+        if (exitCode != 0) {
+            throw new Exception("解压失败，退出码: " + exitCode);
+        }
+
+        // 查找解压后的Java目录
+        File[] files = targetDir.listFiles(File::isDirectory);
+        if (files != null && files.length > 0) {
+            // 返回第一个目录（通常是Java主目录）
+            for (File file : files) {
+                if (findJavaExecutable(file) != null) {
+                    return file;
+                }
+            }
+            return files[0];
+        }
+
+        return targetDir;
     }
 
     /**
