@@ -1624,6 +1624,13 @@ public class ServerController {
         processBuilder.directory(workingDir);
         processBuilder.redirectErrorStream(true);
 
+        // 设置环境变量以启用 ANSI 颜色输出
+        Map<String, String> env = processBuilder.environment();
+        env.put("TERM", "xterm-256color");  // 模拟支持颜色的终端
+        env.put("COLORTERM", "truecolor");   // 启用真彩色支持
+        // 对于某些服务器核心（如 Paper），可能需要这个
+        env.put("FORCE_COLOR", "true");
+
         log.info("正在启动服务器 {} ，使用命令: {}", server.getId(), String.join(" ", command));
 
         return processBuilder.start();
@@ -1690,6 +1697,12 @@ public class ServerController {
         // 设置工作目录（双重保险）
         processBuilder.directory(workingDir);
         processBuilder.redirectErrorStream(true);
+
+        // 设置环境变量以启用 ANSI 颜色输出
+        Map<String, String> env = processBuilder.environment();
+        env.put("TERM", "xterm-256color");
+        env.put("COLORTERM", "truecolor");
+        env.put("FORCE_COLOR", "true");
 
         log.debug("正在使用自定义脚本启动服务器 {} (工作目录: {}): {}",
                 server.getId(), workingDir.getAbsolutePath(), trimmedScript);

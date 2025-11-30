@@ -6,7 +6,7 @@
 # 如需自定义其他配置，请修改 config/application.yml 文件
 # ============================================
 node:
-  version: 1.3
+  version: 1.3.1
 
 # 开发环境配置
 server:
