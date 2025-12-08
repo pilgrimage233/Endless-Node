@@ -102,6 +102,58 @@ public class HomeController {
     }
 
     /**
+     * 解绑Token的节点
+     */
+    @PostMapping("/tokens/{token}/unbind")
+    public ResponseEntity<Map<String, Object>> unbindToken(@PathVariable String token) {
+        try {
+            AccessTokens accessToken = accessTokensService.lambdaQuery()
+                    .eq(AccessTokens::getToken, token)
+                    .one();
+
+            if (accessToken == null) {
+                return ResponseEntity.status(404).body(Map.of("error", "Token不存在"));
+            }
+
+            // 检查是否已绑定
+            if (accessToken.getMasterId() == null && accessToken.getMasterUuid() == null) {
+                return ResponseEntity.badRequest().body(Map.of("error", "Token未绑定任何节点"));
+            }
+
+            String unboundUuid = accessToken.getMasterUuid();
+            Integer unboundMasterId = accessToken.getMasterId();
+
+            // 如果有关联的主控端，标记为已删除
+            if (unboundMasterId != null) {
+                MasterNodes masterNode = masterNodesService.getById(unboundMasterId);
+                if (masterNode != null) {
+                    masterNode.setIsDeleted(1);
+                    masterNode.setLastCommunication(new Date());
+                    masterNodesService.updateById(masterNode);
+                }
+            }
+
+            // 解绑令牌
+            accessToken.setMasterUuid(null);
+            accessToken.setMasterId(null);
+            accessTokensService.updateById(accessToken);
+
+            Map<String, Object> response = new HashMap<>();
+            response.put("success", true);
+            response.put("message", "节点解绑成功");
+            response.put("unboundUuid", unboundUuid);
+            response.put("unboundMasterId", unboundMasterId);
+
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            Map<String, Object> response = new HashMap<>();
+            response.put("success", false);
+            response.put("message", "解绑失败: " + e.getMessage());
+            return ResponseEntity.status(500).body(response);
+        }
+    }
+
+    /**
      * 删除Token
      */
     @DeleteMapping("/tokens/{token}")

@@ -5,19 +5,20 @@ import cc.endmc.endlessnode.domain.AccessTokens;
 import cc.endmc.endlessnode.manage.Node;
 import cc.endmc.endlessnode.service.AccessTokensService;
 import cc.endmc.endlessnode.util.JavaDownloadUrlProvider;
+import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
-import java.io.BufferedReader;
-import java.io.File;
-import java.io.InputStreamReader;
+import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
 
 /**
  * Java环境管理控制器
@@ -487,7 +488,15 @@ public class JavaEnvController {
     @PostMapping("/install")
     public SseEmitter installJava(
             @RequestHeader(Node.Header.X_ENDLESS_TOKEN) String token,
-            @RequestBody Map<String, Object> request) {
+            @RequestBody Map<String, Object> request,
+            HttpServletResponse response) {
+
+        // 关键修复:设置响应头禁用缓冲
+        response.setContentType("text/event-stream");
+        response.setCharacterEncoding("UTF-8");
+        response.setHeader("Cache-Control", "no-cache");
+        response.setHeader("Connection", "keep-alive");
+        response.setHeader("X-Accel-Buffering", "no");  // 禁用Nginx缓冲
 
         // 验证令牌
         AccessTokens accessToken = validateToken(token);
@@ -609,7 +618,8 @@ public class JavaEnvController {
                 Map<String, Object> result = new HashMap<>();
                 result.put("success", true);
                 result.put("javaHome", extractedDir.getAbsolutePath());
-                result.put("version", verifyResult.get("version"));
+                result.put("version", version);  // 使用安装时传入的版本号,而不是验证后的版本号
+                result.put("fullVersion", verifyResult.get("fullVersion"));  // 保留完整版本号供参考
                 result.put("vendor", verifyResult.get("vendor"));
                 result.put("type", verifyResult.get("type"));
                 result.put("arch", verifyResult.get("arch"));
@@ -647,9 +657,17 @@ public class JavaEnvController {
             if (data != null) {
                 event.putAll(data);
             }
+            // 关键修复:添加comment来强制刷新缓冲区
             emitter.send(SseEmitter.event()
-                    .data(event));
+                    .data(event)
+                    .comment(""));  // 添加空注释强制刷新
             log.info("[{}%] {}", progress, message);
+
+            // 额外的刷新机制:发送一个空的心跳事件
+            Thread.sleep(10);  // 短暂延迟确保数据被发送
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            log.error("发送进度被中断", e);
         } catch (Exception e) {
             log.error("发送进度失败", e);
         }
@@ -912,25 +930,29 @@ public class JavaEnvController {
      * 解压ZIP文件
      */
     private File extractZip(File zipFile, File targetDir) throws Exception {
-        File extractedDir = null;
+        String topLevelDir = null;
 
-        try (java.util.zip.ZipInputStream zis = new java.util.zip.ZipInputStream(
-                new java.io.FileInputStream(zipFile))) {
+        try (ZipInputStream zis = new ZipInputStream(
+                new FileInputStream(zipFile))) {
 
-            java.util.zip.ZipEntry entry;
+            ZipEntry entry;
             while ((entry = zis.getNextEntry()) != null) {
                 File file = new File(targetDir, entry.getName());
 
-                // 记录第一个目录作为Java主目录
-                if (extractedDir == null && entry.isDirectory()) {
-                    extractedDir = file;
+                // 记录顶层目录名称(第一个路径段)
+                if (topLevelDir == null) {
+                    String entryName = entry.getName();
+                    int firstSlash = entryName.indexOf('/');
+                    if (firstSlash > 0) {
+                        topLevelDir = entryName.substring(0, firstSlash);
+                    }
                 }
 
                 if (entry.isDirectory()) {
                     file.mkdirs();
                 } else {
                     file.getParentFile().mkdirs();
-                    try (java.io.FileOutputStream fos = new java.io.FileOutputStream(file)) {
+                    try (FileOutputStream fos = new FileOutputStream(file)) {
                         byte[] buffer = new byte[8192];
                         int len;
                         while ((len = zis.read(buffer)) > 0) {
@@ -949,7 +971,48 @@ public class JavaEnvController {
             }
         }
 
-        return extractedDir;
+        // 解压完成后,查找Java根目录
+        if (topLevelDir != null) {
+            File extractedDir = new File(targetDir, topLevelDir);
+            if (extractedDir.exists() && extractedDir.isDirectory()) {
+                // 验证这是Java目录(包含bin/java)
+                if (findJavaExecutable(extractedDir) != null) {
+                    log.info("找到Java根目录: {}", extractedDir.getAbsolutePath());
+                    return extractedDir;
+                }
+            }
+        }
+
+        // 如果没有找到顶层目录,在targetDir中搜索包含bin/java的目录
+        File[] files = targetDir.listFiles(File::isDirectory);
+        if (files != null) {
+            for (File dir : files) {
+                if (findJavaExecutable(dir) != null) {
+                    log.info("在子目录中找到Java: {}", dir.getAbsolutePath());
+                    return dir;
+                }
+            }
+        }
+
+        // 如果还是没找到,可能是重复安装,尝试查找任何有效的Java目录
+        log.warn("未找到新解压的Java目录,可能是重复安装,尝试查找已存在的Java目录");
+        if (files != null) {
+            for (File dir : files) {
+                if (findJavaExecutable(dir) != null) {
+                    try {
+                        Map<String, Object> verifyResult = verifyAndGetJavaInfo(dir.getAbsolutePath());
+                        if (verifyResult != null && Boolean.TRUE.equals(verifyResult.get("valid"))) {
+                            log.info("找到已存在的Java目录,将重用: {}", dir.getAbsolutePath());
+                            return dir;
+                        }
+                    } catch (Exception e) {
+                        log.debug("验证目录失败: {}", dir.getAbsolutePath(), e);
+                    }
+                }
+            }
+        }
+
+        throw new Exception("解压后未找到有效的Java目录");
     }
 
     /**
@@ -963,6 +1026,16 @@ public class JavaEnvController {
             throw new Exception("Windows系统不支持tar.gz格式，请使用zip格式");
         }
 
+        // 解压前记录已存在的目录
+        Set<String> existingDirs = new HashSet<>();
+        File[] existingFiles = targetDir.listFiles(File::isDirectory);
+        if (existingFiles != null) {
+            for (File f : existingFiles) {
+                existingDirs.add(f.getName());
+            }
+        }
+        log.info("解压前已存在的目录: {}", existingDirs);
+
         // 使用系统命令解压
         ProcessBuilder pb = new ProcessBuilder("tar", "-xzf", tarGzFile.getAbsolutePath(), "-C", targetDir.getAbsolutePath());
         Process process = pb.start();
@@ -972,19 +1045,45 @@ public class JavaEnvController {
             throw new Exception("解压失败，退出码: " + exitCode);
         }
 
-        // 查找解压后的Java目录
+        // 查找新解压出来的目录
         File[] files = targetDir.listFiles(File::isDirectory);
         if (files != null && files.length > 0) {
-            // 返回第一个目录（通常是Java主目录）
+            // 优先查找新增的且包含bin/java的目录
             for (File file : files) {
-                if (findJavaExecutable(file) != null) {
+                if (!existingDirs.contains(file.getName()) && findJavaExecutable(file) != null) {
+                    log.info("找到新解压的Java根目录: {}", file.getAbsolutePath());
                     return file;
                 }
             }
-            return files[0];
+
+            // 如果没找到新增的Java目录,查找所有新增目录
+            for (File file : files) {
+                if (!existingDirs.contains(file.getName())) {
+                    log.warn("找到新增目录但不包含java可执行文件: {}", file.getAbsolutePath());
+                    return file;
+                }
+            }
+
+            // 如果还是没找到新增目录,可能是重复安装(目录已存在)
+            // 尝试在已存在的目录中查找匹配的Java版本
+            log.warn("未找到新增目录,可能是重复安装,尝试查找已存在的Java目录");
+            for (File file : files) {
+                if (findJavaExecutable(file) != null) {
+                    // 验证版本是否匹配(可选)
+                    try {
+                        Map<String, Object> verifyResult = verifyAndGetJavaInfo(file.getAbsolutePath());
+                        if (verifyResult != null && Boolean.TRUE.equals(verifyResult.get("valid"))) {
+                            log.info("找到已存在的Java目录,将重用: {}", file.getAbsolutePath());
+                            return file;
+                        }
+                    } catch (Exception e) {
+                        log.debug("验证目录失败: {}", file.getAbsolutePath(), e);
+                    }
+                }
+            }
         }
 
-        return targetDir;
+        throw new Exception("解压后未找到新的Java目录,且没有可重用的已存在目录");
     }
 
     /**

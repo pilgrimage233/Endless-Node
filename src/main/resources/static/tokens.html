@@ -598,6 +598,7 @@
                         ${nodeInfoHtml}
                         <div class="actions">
                             <button class="btn btn-small" onclick="verifyToken('${token.token}')">验证</button>
+                            ${token.isBound ? `<button class="btn btn-small" onclick="unbindToken('${token.token}')">解绑节点</button>` : ''}
                             <button class="btn btn-danger btn-small" onclick="deleteToken('${token.token}')">删除</button>
                         </div>
                     </div>
@@ -661,6 +662,29 @@
             }
         } catch (error) {
             showAlert('验证失败: ' + error.message, 'error');
+        }
+    }
+
+    // 解绑token
+    async function unbindToken(token) {
+        if (!confirm('确定要解绑此Token的节点吗？解绑后节点将无法继续使用此Token。')) {
+            return;
+        }
+
+        try {
+            const response = await fetch(`/api/tokens/${encodeURIComponent(token)}/unbind`, {
+                method: 'POST'
+            });
+
+            if (response.ok) {
+                showAlert('节点解绑成功');
+                loadTokens();
+            } else {
+                const error = await response.json();
+                showAlert('解绑失败: ' + error.message, 'error');
+            }
+        } catch (error) {
+            showAlert('解绑失败: ' + error.message, 'error');
         }
     }
 
