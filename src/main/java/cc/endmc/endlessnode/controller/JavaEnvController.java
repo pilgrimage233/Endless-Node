@@ -2,6 +2,7 @@ package cc.endmc.endlessnode.controller;
 
 
 import cc.endmc.endlessnode.domain.AccessTokens;
+import cc.endmc.endlessnode.manage.JavaInstallTaskManager;
 import cc.endmc.endlessnode.manage.Node;
 import cc.endmc.endlessnode.service.AccessTokensService;
 import cc.endmc.endlessnode.util.JavaDownloadUrlProvider;
@@ -30,6 +31,13 @@ public class JavaEnvController {
 
     @Autowired
     private AccessTokensService accessTokensService;
+
+    @Autowired
+    private JavaInstallTaskManager taskManager;
+
+    @Autowired
+    @org.springframework.beans.factory.annotation.Qualifier("taskExecutor")
+    private java.util.concurrent.Executor taskExecutor;
 
     /**
      * 验证Java环境是否存在并获取版本信息
@@ -531,16 +539,33 @@ public class JavaEnvController {
         }
 
         // 创建SSE发射器，超时时间10分钟
-        SseEmitter emitter =
-                new SseEmitter(600000L);
+        SseEmitter emitter = new SseEmitter(600000L);
 
-        // 异步执行安装
-        new Thread(() -> {
+        // 创建安装任务
+        JavaInstallTaskManager.InstallTask task = taskManager.createTask(emitter);
+        String taskId = task.getTaskId();
+
+        // 发送任务ID给前端
+        try {
+            emitter.send(SseEmitter.event()
+                    .data(Map.of(
+                            "type", "task_created",
+                            "taskId", taskId,
+                            "message", "任务已创建"
+                    )));
+        } catch (Exception e) {
+            log.error("发送任务ID失败", e);
+        }
+
+        // 使用线程池异步执行安装
+        taskExecutor.execute(() -> {
             try {
-                log.info("开始安装Java {} ({}), 安装路径: {}", version, vendor, installPath);
-                installJavaEnvironmentWithProgress(version, installPath, vendor, emitter);
+                log.info("开始安装Java {} ({}), 安装路径: {}, 任务ID: {}", version, vendor, installPath, taskId);
+                installJavaEnvironmentWithProgress(version, installPath, vendor, task);
+                taskManager.completeTask(taskId, true);
             } catch (Exception e) {
                 log.error("安装Java环境失败", e);
+                taskManager.completeTask(taskId, false);
                 try {
                     emitter.send(SseEmitter.event()
                             .data(Map.of(
@@ -553,7 +578,7 @@ public class JavaEnvController {
                     emitter.completeWithError(ex);
                 }
             }
-        }).start();
+        });
 
         return emitter;
     }
@@ -562,9 +587,17 @@ public class JavaEnvController {
      * 安装Java环境（带进度推送）
      */
     private void installJavaEnvironmentWithProgress(String version, String installPath, String vendor,
-                                                    SseEmitter emitter) throws Exception {
-
+                                                    JavaInstallTaskManager.InstallTask task) throws Exception {
+        SseEmitter emitter = task.getEmitter();
+        
         try {
+            // 检查是否已取消
+            if (task.isCancelled()) {
+                sendProgress(emitter, "warning", "安装已取消", 0);
+                emitter.complete();
+                return;
+            }
+
             // 1. 创建安装目录
             sendProgress(emitter, "info", "正在创建安装目录...", 10);
             File installDir = new File(installPath);
@@ -572,6 +605,12 @@ public class JavaEnvController {
                 if (!installDir.mkdirs()) {
                     throw new Exception("无法创建安装目录: " + installPath);
                 }
+            }
+
+            if (task.isCancelled()) {
+                sendProgress(emitter, "warning", "安装已取消", 0);
+                emitter.complete();
+                return;
             }
 
             String os = System.getProperty("os.name").toLowerCase();
@@ -595,14 +634,37 @@ public class JavaEnvController {
 
             log.info("下载URL: {}", downloadUrl);
 
+            if (task.isCancelled()) {
+                sendProgress(emitter, "warning", "安装已取消", 0);
+                emitter.complete();
+                return;
+            }
+
             // 3. 下载文件
             sendProgress(emitter, "info", "开始下载Java安装包...", 30);
-            File downloadFile = downloadJavaPackageWithProgress(downloadUrl, installDir, version, emitter);
+            File downloadFile = downloadJavaPackageWithProgress(downloadUrl, installDir, version, task);
+
+            // 如果下载被取消，清理文件
+            if (task.isCancelled()) {
+                if (downloadFile != null && downloadFile.exists()) {
+                    downloadFile.delete();
+                    log.info("已删除未完成的下载文件");
+                }
+                sendProgress(emitter, "warning", "安装已取消", 0);
+                emitter.complete();
+                return;
+            }
 
             // 4. 解压文件
             sendProgress(emitter, "info", "开始解压安装包...", 70);
             File extractedDir = extractJavaPackage(downloadFile, installDir);
             log.info("解压完成: {}", extractedDir.getAbsolutePath());
+
+            if (task.isCancelled()) {
+                sendProgress(emitter, "warning", "安装已取消", 0);
+                emitter.complete();
+                return;
+            }
 
             // 5. 验证安装
             sendProgress(emitter, "info", "正在验证安装...", 90);
@@ -630,7 +692,11 @@ public class JavaEnvController {
                 throw new Exception("Java安装验证失败");
             }
         } catch (Exception e) {
-            sendProgress(emitter, "error", "安装失败: " + e.getMessage(), 0);
+            if (task.isCancelled()) {
+                sendProgress(emitter, "warning", "安装已取消", 0);
+            } else {
+                sendProgress(emitter, "error", "安装失败: " + e.getMessage(), 0);
+            }
             emitter.complete();
             throw e;
         }
@@ -753,10 +819,11 @@ public class JavaEnvController {
     }
 
     /**
-     * 下载Java安装包（带进度推送）
+     * 下载Java安装包（带进度推送和取消检查）
      */
     private File downloadJavaPackageWithProgress(String url, File installDir, String version,
-                                                 SseEmitter emitter) throws Exception {
+                                                 JavaInstallTaskManager.InstallTask task) throws Exception {
+        SseEmitter emitter = task.getEmitter();
         java.net.URL downloadUrl = new java.net.URL(url);
         java.net.HttpURLConnection connection = (java.net.HttpURLConnection) downloadUrl.openConnection();
         connection.setRequestMethod("GET");
@@ -764,6 +831,8 @@ public class JavaEnvController {
         connection.setReadTimeout(300000);
         connection.setInstanceFollowRedirects(true);
 
+        File targetFile = null;
+        
         try {
             connection.connect();
 
@@ -785,7 +854,7 @@ public class JavaEnvController {
 
             fileName = fileName.replaceAll("[^a-zA-Z0-9._-]", "_");
 
-            File targetFile = new File(installDir, fileName);
+            targetFile = new File(installDir, fileName);
             log.info("下载Java安装包到: {}", targetFile.getAbsolutePath());
 
             try (java.io.InputStream in = connection.getInputStream();
@@ -799,6 +868,12 @@ public class JavaEnvController {
                 int lastProgress = 30;
 
                 while ((bytesRead = in.read(buffer)) != -1) {
+                    // 关键：检查取消标志
+                    if (task.isCancelled()) {
+                        log.info("检测到取消信号，停止下载");
+                        throw new InterruptedException("下载已被用户取消");
+                    }
+
                     out.write(buffer, 0, bytesRead);
                     totalBytesRead += bytesRead;
 
@@ -826,6 +901,13 @@ public class JavaEnvController {
                 }
 
                 log.info("下载完成，总大小: {} MB", totalBytesRead / (1024 * 1024));
+            } catch (InterruptedException e) {
+                // 下载被取消，删除未完成的文件
+                if (targetFile != null && targetFile.exists()) {
+                    targetFile.delete();
+                    log.info("已删除未完成的下载文件: {}", targetFile.getAbsolutePath());
+                }
+                throw e;
             }
 
             return targetFile;
@@ -1084,6 +1166,40 @@ public class JavaEnvController {
         }
 
         throw new Exception("解压后未找到新的Java目录,且没有可重用的已存在目录");
+    }
+
+    /**
+     * 取消Java安装任务
+     */
+    @PostMapping("/install/cancel")
+    public ResponseEntity<Map<String, Object>> cancelInstall(
+            @RequestHeader(Node.Header.X_ENDLESS_TOKEN) String token,
+            @RequestBody Map<String, String> request) {
+
+        // 验证令牌
+        AccessTokens accessToken = validateToken(token);
+        if (accessToken == null) {
+            return ResponseEntity.status(401).body(Map.of("error", "无效的访问令牌"));
+        }
+
+        String taskId = request.get("taskId");
+        if (taskId == null || taskId.trim().isEmpty()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "任务ID不能为空"));
+        }
+
+        boolean cancelled = taskManager.cancelTask(taskId);
+        if (cancelled) {
+            return ResponseEntity.ok(Map.of(
+                    "success", true,
+                    "message", "任务已取消",
+                    "taskId", taskId
+            ));
+        } else {
+            return ResponseEntity.status(404).body(Map.of(
+                    "error", "任务不存在或已完成",
+                    "taskId", taskId
+            ));
+        }
     }
 
     /**
