@@ -26,4 +26,8 @@ public class OperationType {
 
     public static final String SEND_COMMAND = "SEND_COMMAND";
 
+    public static final String GET_PLAYERS = "GET_PLAYERS";
+
+    public static final String PLAYER_ACTION = "PLAYER_ACTION";
+
 }

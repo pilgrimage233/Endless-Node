@@ -9,7 +9,10 @@ import cc.endmc.endlessnode.manage.Node;
 import cc.endmc.endlessnode.service.AccessTokensService;
 import cc.endmc.endlessnode.service.OperationLogsService;
 import cc.endmc.endlessnode.service.ServerInstancesService;
+import cc.endmc.endlessnode.util.MinecraftServerQuery;
+import cn.hutool.core.net.Ipv4Util;
 import jakarta.annotation.PreDestroy;
+import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
@@ -19,10 +22,15 @@ import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.web.bind.annotation.*;
 
 import java.io.*;
+import java.net.InetAddress;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * 服务器实例控制器
@@ -45,13 +53,19 @@ public class ServerController {
     private static final String DEFAULT_JVM_ARGS = "-XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=200";
     private static final long RESTART_WAIT_TIME_MS = 5000;
     private static final long FORCE_KILL_TIMEOUT_SECONDS = 10;
-    private static final int MAX_CONSOLE_LOG_LINES = 500; // 每个服务器最多缓存500条日志
+    private static final int MAX_CONSOLE_LOG_LINES = 2000; // 每个服务器最多缓存2000条日志
 
     // 用于同步服务器操作的锁对象
     private static final Map<Integer, Object> SERVER_LOCKS = new ConcurrentHashMap<>();
 
     // 控制台日志缓存：服务器ID -> 日志列表
     private static final ConcurrentHashMap<Integer, LinkedBlockingDeque<String>> CONSOLE_LOG_CACHE = new ConcurrentHashMap<>();
+
+    // Query连接缓存：服务器ID -> Query连接信息
+    private static final ConcurrentHashMap<Integer, CachedQueryConnection> QUERY_CONNECTION_CACHE = new ConcurrentHashMap<>();
+    private static final long QUERY_CONNECTION_TTL_MS = 30000L; // 30秒缓存时间
+    private static final int QUERY_PORT_RANGE_START = 25600; // Query端口范围开始
+    private static final int QUERY_PORT_RANGE_END = 27000;   // Query端口范围结束
 
     // 控制台消息派发队列和线程池
     private static final int CONSOLE_DISPATCH_QUEUE_CAPACITY = 2048;
@@ -66,7 +80,7 @@ public class ServerController {
     private static final long PROCESS_INFO_CACHE_TTL_MS = 5000L;
     private static final ConcurrentHashMap<Long, CachedProcessInfo> PROCESS_INFO_CACHE = new ConcurrentHashMap<>();
 
-    // 启动控制台消息派发线程
+    // 启动控制台消息派发线程和Query连接清理任务
     static {
         CONSOLE_DISPATCH_EXECUTOR.submit(() -> {
             while (!Thread.currentThread().isInterrupted()) {
@@ -80,6 +94,21 @@ public class ServerController {
                 }
             }
         });
+
+        // 启动Query连接清理任务
+        ScheduledExecutorService queryCleanupExecutor = Executors.newSingleThreadScheduledExecutor(runnable -> {
+            Thread thread = new Thread(runnable, "QueryConnectionCleanup");
+            thread.setDaemon(true);
+            return thread;
+        });
+
+        queryCleanupExecutor.scheduleWithFixedDelay(() -> {
+            try {
+                cleanupExpiredQueryConnections();
+            } catch (Exception e) {
+                log.error("清理过期Query连接时发生错误", e);
+            }
+        }, 60, 60, TimeUnit.SECONDS); // 每60秒清理一次
     }
 
     /**
@@ -90,115 +119,33 @@ public class ServerController {
     }
 
     /**
-     * 应用关闭时的清理方法
-     * 确保所有运行中的服务器进程被正确关闭
+     * 清理过期的Query连接
      */
-    @PreDestroy
-    public void cleanup() {
-        log.info("应用正在关闭，开始清理运行中的服务器进程...");
+    private static void cleanupExpiredQueryConnections() {
+        long currentTime = System.currentTimeMillis();
+        List<Integer> expiredKeys = new ArrayList<>();
 
-        // 获取所有运行中的服务器ID
-        Set<Integer> runningServerIds = new HashSet<>(Node.getRunningServers().keySet());
-
-        if (runningServerIds.isEmpty()) {
-            log.info("没有运行中的服务器进程需要清理");
-            return;
-        }
-
-        log.info("发现 {} 个运行中的服务器，准备停止", runningServerIds.size());
-
-        // 遍历所有运行中的服务器并尝试优雅关闭
-        for (Integer serverId : runningServerIds) {
-            try {
-                Process process = Node.getRunningServers().get(serverId);
-                if (process == null || !process.isAlive()) {
-                    Node.getRunningServers().remove(serverId);
-                    continue;
-                }
-
-                log.info("正在停止服务器: {}", serverId);
-
-                // 停止控制台输出线程
-                stopConsoleOutputThread(serverId);
-
-                // 尝试向Minecraft服务器发送stop命令
-                try {
-                    OutputStreamWriter writer = Node.getServerWriters().get(serverId);
-                    if (writer == null) {
-                        OutputStream outputStream = process.getOutputStream();
-                        if (outputStream != null) {
-                            writer = new OutputStreamWriter(outputStream, StandardCharsets.UTF_8);
-                        }
-                    }
-
-                    if (writer != null) {
-                        writer.write("stop\n");
-                        writer.flush();
-                        log.debug("已向服务器 {} 发送stop命令", serverId);
-                    }
-                } catch (Exception e) {
-                    log.warn("向服务器 {} 发送stop命令失败: {}", serverId, e.getMessage());
-                }
-
-                // 等待进程优雅终止（最多等待10秒）
-                boolean terminated = process.waitFor(10, TimeUnit.SECONDS);
-
-                if (!terminated) {
-                    log.warn("服务器 {} 未能在10秒内优雅终止，强制终止", serverId);
-                    process.destroyForcibly();
-                    process.waitFor(5, TimeUnit.SECONDS);
-                }
-
-                // 清理资源
-                Node.getRunningServers().remove(serverId);
-                Node.getServerStartTimes().remove(serverId);
-                OutputStreamWriter writer = Node.getServerWriters().remove(serverId);
-                closeWriter(writer);
-
-                // 更新数据库中的服务器状态
-                try {
-                    ServerInstances server = serverInstancesService.getById(serverId);
-                    if (server != null) {
-                        server.setStatus("STOPPED");
-                        server.setUpdatedAt(new Date());
-                        serverInstancesService.updateById(server);
-                    }
-                } catch (Exception e) {
-                    log.error("更新服务器 {} 状态失败", serverId, e);
-                }
-
-                log.info("服务器 {} 已成功停止", serverId);
-
-            } catch (Exception e) {
-                log.error("停止服务器 {} 时发生错误", serverId, e);
-
-                // 强制清理资源
-                try {
-                    Process process = Node.getRunningServers().remove(serverId);
-                    if (process != null && process.isAlive()) {
-                        process.destroyForcibly();
-                    }
-                    Node.getServerStartTimes().remove(serverId);
-                    OutputStreamWriter writer = Node.getServerWriters().remove(serverId);
-                    closeWriter(writer);
-                } catch (Exception cleanupEx) {
-                    log.error("强制清理服务器 {} 资源时发生错误", serverId, cleanupEx);
-                }
+        for (Map.Entry<Integer, CachedQueryConnection> entry : QUERY_CONNECTION_CACHE.entrySet()) {
+            CachedQueryConnection cached = entry.getValue();
+            if (cached != null && (currentTime - cached.timestamp >= QUERY_CONNECTION_TTL_MS)) {
+                expiredKeys.add(entry.getKey());
             }
         }
 
-        // 清理所有控制台线程
-        Set<Integer> consoleThreadIds = new HashSet<>(Node.getConsoleThreads().keySet());
-        for (Integer serverId : consoleThreadIds) {
-            stopConsoleOutputThread(serverId);
+        if (!expiredKeys.isEmpty()) {
+            log.debug("清理 {} 个过期的Query连接", expiredKeys.size());
+            for (Integer serverId : expiredKeys) {
+                CachedQueryConnection cached = QUERY_CONNECTION_CACHE.remove(serverId);
+                if (cached != null && cached.query != null) {
+                    try {
+                        cached.query.close();
+                        log.debug("关闭服务器 {} 的过期Query连接", serverId);
+                    } catch (Exception e) {
+                        log.debug("关闭过期Query连接时发生错误: {}", e.getMessage());
+                    }
+                }
+            }
         }
-
-        log.info("所有服务器进程清理完成");
-
-        CONSOLE_DISPATCH_EXECUTOR.shutdownNow();
-        CONSOLE_DISPATCH_QUEUE.clear();
-
-        PROCESS_INFO_CACHE.clear();
     }
 
     /**
@@ -391,6 +338,121 @@ public class ServerController {
     }
 
     /**
+     * 应用关闭时的清理方法
+     * 确保所有运行中的服务器进程被正确关闭
+     */
+    @PreDestroy
+    public void cleanup() {
+        log.info("应用正在关闭，开始清理运行中的服务器进程...");
+
+        // 获取所有运行中的服务器ID
+        Set<Integer> runningServerIds = new HashSet<>(Node.getRunningServers().keySet());
+
+        if (runningServerIds.isEmpty()) {
+            log.info("没有运行中的服务器进程需要清理");
+            return;
+        }
+
+        log.info("发现 {} 个运行中的服务器，准备停止", runningServerIds.size());
+
+        // 遍历所有运行中的服务器并尝试优雅关闭
+        for (Integer serverId : runningServerIds) {
+            try {
+                Process process = Node.getRunningServers().get(serverId);
+                if (process == null || !process.isAlive()) {
+                    Node.getRunningServers().remove(serverId);
+                    continue;
+                }
+
+                log.info("正在停止服务器: {}", serverId);
+
+                // 停止控制台输出线程
+                stopConsoleOutputThread(serverId);
+
+                // 尝试向Minecraft服务器发送stop命令
+                try {
+                    OutputStreamWriter writer = Node.getServerWriters().get(serverId);
+                    if (writer == null) {
+                        OutputStream outputStream = process.getOutputStream();
+                        if (outputStream != null) {
+                            writer = new OutputStreamWriter(outputStream, StandardCharsets.UTF_8);
+                        }
+                    }
+
+                    if (writer != null) {
+                        writer.write("stop\n");
+                        writer.flush();
+                        log.debug("已向服务器 {} 发送stop命令", serverId);
+                    }
+                } catch (Exception e) {
+                    log.warn("向服务器 {} 发送stop命令失败: {}", serverId, e.getMessage());
+                }
+
+                // 等待进程优雅终止（最多等待10秒）
+                boolean terminated = process.waitFor(10, TimeUnit.SECONDS);
+
+                if (!terminated) {
+                    log.warn("服务器 {} 未能在10秒内优雅终止，强制终止", serverId);
+                    process.destroyForcibly();
+                    process.waitFor(5, TimeUnit.SECONDS);
+                }
+
+                // 清理资源
+                Node.getRunningServers().remove(serverId);
+                Node.getServerStartTimes().remove(serverId);
+                OutputStreamWriter writer = Node.getServerWriters().remove(serverId);
+                closeWriter(writer);
+
+                // 更新数据库中的服务器状态
+                try {
+                    ServerInstances server = serverInstancesService.getById(serverId);
+                    if (server != null) {
+                        server.setStatus("STOPPED");
+                        server.setUpdatedAt(new Date());
+                        serverInstancesService.updateById(server);
+                    }
+                } catch (Exception e) {
+                    log.error("更新服务器 {} 状态失败", serverId, e);
+                }
+
+                log.info("服务器 {} 已成功停止", serverId);
+
+            } catch (Exception e) {
+                log.error("停止服务器 {} 时发生错误", serverId, e);
+
+                // 强制清理资源
+                try {
+                    Process process = Node.getRunningServers().remove(serverId);
+                    if (process != null && process.isAlive()) {
+                        process.destroyForcibly();
+                    }
+                    Node.getServerStartTimes().remove(serverId);
+                    OutputStreamWriter writer = Node.getServerWriters().remove(serverId);
+                    closeWriter(writer);
+                } catch (Exception cleanupEx) {
+                    log.error("强制清理服务器 {} 资源时发生错误", serverId, cleanupEx);
+                }
+            }
+        }
+
+        // 清理所有控制台线程
+        Set<Integer> consoleThreadIds = new HashSet<>(Node.getConsoleThreads().keySet());
+        for (Integer serverId : consoleThreadIds) {
+            stopConsoleOutputThread(serverId);
+        }
+
+        log.info("所有服务器进程清理完成");
+
+        CONSOLE_DISPATCH_EXECUTOR.shutdownNow();
+        CONSOLE_DISPATCH_QUEUE.clear();
+
+        // 清理Query连接缓存
+        cleanupQueryConnections();
+
+        PROCESS_INFO_CACHE.clear();
+    }
+
+    /**
      * 启动服务器实例
      *
      * @param token       访问令牌
@@ -440,6 +502,9 @@ public class ServerController {
                         startScript.get("script") != null && !startScript.get("script").trim().isEmpty()) {
                     updateServerJvmArgsFromScript(server, startScript.get("script"));
                 }
+
+                // 确保Query功能已启用
+                ensureQueryEnabled(server);
 
                 // 启动服务器
                 if (startScript != null && startScript.containsKey("script") &&
@@ -574,6 +639,9 @@ public class ServerController {
                 OutputStreamWriter writer = Node.getServerWriters().remove(serverId);
                 closeWriter(writer);
 
+                // 清理Query连接缓存
+                removeCachedQueryConnection(serverId);
+
                 // 更新服务器状态
                 server.setStatus("STOPPED");
                 server.setUpdatedAt(new Date());
@@ -673,6 +741,9 @@ public class ServerController {
                 OutputStreamWriter writer = Node.getServerWriters().remove(serverId);
                 closeWriter(writer);
 
+                // 清理Query连接缓存
+                removeCachedQueryConnection(serverId);
+
                 // 等待进程完全终止
                 try {
                     Thread.sleep(RESTART_WAIT_TIME_MS);
@@ -753,98 +824,6 @@ public class ServerController {
                         Map.of("instanceId", serverId, "instanceName", server.getInstanceName(), "error", e.getMessage()));
 
                 return ResponseEntity.status(500).body(Map.of("error", "重启服务器失败: " + e.getMessage()));
-            }
-        }
-    }
-
-    /**
-     * 强制终止服务器实例
-     *
-     * @param token    访问令牌
-     * @param serverId 服务器实例ID
-     * @return 终止结果
-     */
-    @PostMapping("/{serverId}/kill")
-    public ResponseEntity<Map<String, Object>> killServer(
-            @RequestHeader(Node.Header.X_ENDLESS_TOKEN) String token,
-            @PathVariable Integer serverId) {
-
-        // 验证令牌
-        AccessTokens accessToken = validateToken(token);
-        if (accessToken == null) {
-            return ResponseEntity.status(401).body(Map.of("error", "无效的访问令牌"));
-        }
-
-        // 验证 serverId
-        if (serverId == null || serverId <= 0) {
-            return ResponseEntity.badRequest().body(Map.of("error", "无效的服务器ID"));
-        }
-
-        // 获取服务器实例
-        ServerInstances server = serverInstancesService.getById(serverId);
-        if (server == null) {
-            return ResponseEntity.notFound().build();
-        }
-
-        // 检查权限
-        if (!hasServerPermission(server, accessToken)) {
-            return ResponseEntity.status(403).body(Map.of("error", "权限不足"));
-        }
-
-        // 使用锁防止并发操作同一服务器
-        synchronized (getServerLock(serverId)) {
-            // 检查服务器是否在运行
-            Process process = Node.getRunningServers().get(serverId);
-            if (process == null) {
-                return ResponseEntity.badRequest().body(Map.of("error", "服务器未在运行"));
-            }
-
-            try {
-                // 停止控制台输出线程
-                stopConsoleOutputThread(serverId);
-
-                // 强制终止进程
-                process.destroyForcibly();
-
-                // 等待进程完全终止
-                boolean terminated = process.waitFor(FORCE_KILL_TIMEOUT_SECONDS, TimeUnit.SECONDS);
-                if (!terminated) {
-                    // 如果进程仍然存在，记录警告
-                    log.warn("服务器 {} 的进程在 {} 秒内未终止",
-                            serverId, FORCE_KILL_TIMEOUT_SECONDS);
-                    logOperation(accessToken.getMasterId(), OperationType.KILL_SERVER, false,
-                            Map.of("instanceId", serverId, "instanceName", server.getInstanceName(),
-                                    "warning", "进程在" + FORCE_KILL_TIMEOUT_SECONDS + "秒内未终止"));
-                }
-
-                // 清理资源
-                Node.getRunningServers().remove(serverId);
-                Node.getServerStartTimes().remove(serverId);
-                OutputStreamWriter writer = Node.getServerWriters().remove(serverId);
-                closeWriter(writer);
-
-                // 更新服务器状态
-                server.setStatus("STOPPED");
-                server.setUpdatedAt(new Date());
-                serverInstancesService.updateById(server);
-
-                // 记录操作日志
-                logOperation(accessToken.getMasterId(), OperationType.KILL_SERVER, true,
-                        Map.of("instanceId", serverId, "instanceName", server.getInstanceName()));
-
-                Map<String, Object> response = new HashMap<>();
-                response.put("success", true);
-                response.put("message", "服务器强制终止成功");
-
-                return ResponseEntity.ok(response);
-            } catch (Exception e) {
-                log.error("强制终止服务器时发生错误: {}", serverId, e);
-
-                // 记录操作日志
-                logOperation(accessToken.getMasterId(), OperationType.KILL_SERVER, false,
-                        Map.of("instanceId", serverId, "instanceName", server.getInstanceName(), "error", e.getMessage()));
-
-                return ResponseEntity.status(500).body(Map.of("error", "强制终止服务器失败: " + e.getMessage()));
             }
         }
     }
@@ -963,14 +942,14 @@ public class ServerController {
     }
 
     /**
-     * 删除服务器实例
+     * 强制终止服务器实例
      *
      * @param token    访问令牌
      * @param serverId 服务器实例ID
-     * @return 删除结果
+     * @return 终止结果
      */
-    @DeleteMapping("/{serverId}")
-    public ResponseEntity<Map<String, Object>> deleteServer(
+    @PostMapping("/{serverId}/kill")
+    public ResponseEntity<Map<String, Object>> killServer(
             @RequestHeader(Node.Header.X_ENDLESS_TOKEN) String token,
             @PathVariable Integer serverId) {
 
@@ -998,38 +977,61 @@ public class ServerController {
 
         // 使用锁防止并发操作同一服务器
         synchronized (getServerLock(serverId)) {
-            // 检查服务器是否正在运行
-            if (Node.getRunningServers().containsKey(serverId)) {
-                return ResponseEntity.badRequest().body(Map.of("error", "无法删除正在运行的服务器"));
+            // 检查服务器是否在运行
+            Process process = Node.getRunningServers().get(serverId);
+            if (process == null) {
+                return ResponseEntity.badRequest().body(Map.of("error", "服务器未在运行"));
             }
 
             try {
-                // 删除服务器实例
-                serverInstancesService.removeById(serverId);
+                // 停止控制台输出线程
+                stopConsoleOutputThread(serverId);
 
-                // 清理锁对象
-                SERVER_LOCKS.remove(serverId);
+                // 强制终止进程
+                process.destroyForcibly();
 
-                // 清理日志缓存
-                clearLogCache(serverId);
+                // 等待进程完全终止
+                boolean terminated = process.waitFor(FORCE_KILL_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+                if (!terminated) {
+                    // 如果进程仍然存在，记录警告
+                    log.warn("服务器 {} 的进程在 {} 秒内未终止",
+                            serverId, FORCE_KILL_TIMEOUT_SECONDS);
+                    logOperation(accessToken.getMasterId(), OperationType.KILL_SERVER, false,
+                            Map.of("instanceId", serverId, "instanceName", server.getInstanceName(),
+                                    "warning", "进程在" + FORCE_KILL_TIMEOUT_SECONDS + "秒内未终止"));
+                }
+
+                // 清理资源
+                Node.getRunningServers().remove(serverId);
+                Node.getServerStartTimes().remove(serverId);
+                OutputStreamWriter writer = Node.getServerWriters().remove(serverId);
+                closeWriter(writer);
+
+                // 清理Query连接缓存
+                removeCachedQueryConnection(serverId);
+
+                // 更新服务器状态
+                server.setStatus("STOPPED");
+                server.setUpdatedAt(new Date());
+                serverInstancesService.updateById(server);
 
                 // 记录操作日志
-                logOperation(accessToken.getMasterId(), OperationType.DELETE_SERVER, true,
+                logOperation(accessToken.getMasterId(), OperationType.KILL_SERVER, true,
                         Map.of("instanceId", serverId, "instanceName", server.getInstanceName()));
 
                 Map<String, Object> response = new HashMap<>();
                 response.put("success", true);
-                response.put("message", "服务器删除成功");
+                response.put("message", "服务器强制终止成功");
 
                 return ResponseEntity.ok(response);
             } catch (Exception e) {
-                log.error("删除服务器时发生错误: {}", serverId, e);
+                log.error("强制终止服务器时发生错误: {}", serverId, e);
 
                 // 记录操作日志
-                logOperation(accessToken.getMasterId(), OperationType.DELETE_SERVER, false,
+                logOperation(accessToken.getMasterId(), OperationType.KILL_SERVER, false,
                         Map.of("instanceId", serverId, "instanceName", server.getInstanceName(), "error", e.getMessage()));
 
-                return ResponseEntity.status(500).body(Map.of("error", "删除服务器失败: " + e.getMessage()));
+                return ResponseEntity.status(500).body(Map.of("error", "强制终止服务器失败: " + e.getMessage()));
             }
         }
     }
@@ -1818,94 +1820,77 @@ public class ServerController {
     }
 
     /**
-     * 从启动脚本中提取并更新服务器的JVM参数
+     * 删除服务器实例
      *
-     * @param server 服务器实例
-     * @param script 启动脚本
+     * @param token    访问令牌
+     * @param serverId 服务器实例ID
+     * @return 删除结果
      */
-    private void updateServerJvmArgsFromScript(ServerInstances server, String script) {
-        if (server == null || script == null || script.trim().isEmpty()) {
-            return;
+    @DeleteMapping("/{serverId}")
+    public ResponseEntity<Map<String, Object>> deleteServer(
+            @RequestHeader(Node.Header.X_ENDLESS_TOKEN) String token,
+            @PathVariable Integer serverId) {
+
+        // 验证令牌
+        AccessTokens accessToken = validateToken(token);
+        if (accessToken == null) {
+            return ResponseEntity.status(401).body(Map.of("error", "无效的访问令牌"));
         }
 
-        try {
-            boolean needsUpdate = false;
+        // 验证 serverId
+        if (serverId == null || serverId <= 0) {
+            return ResponseEntity.badRequest().body(Map.of("error", "无效的服务器ID"));
+        }
 
-            // 提取 -Xmx 参数
-            java.util.regex.Pattern xmxPattern = java.util.regex.Pattern.compile("-Xmx(\\d+)([MmGgKk]?)");
-            java.util.regex.Matcher xmxMatcher = xmxPattern.matcher(script);
-            if (xmxMatcher.find()) {
-                String value = xmxMatcher.group(1);
-                String unit = xmxMatcher.group(2).toUpperCase();
+        // 获取服务器实例
+        ServerInstances server = serverInstancesService.getById(serverId);
+        if (server == null) {
+            return ResponseEntity.notFound().build();
+        }
 
-                int memoryMb = Integer.parseInt(value);
-                // 转换为MB
-                if ("G".equals(unit)) {
-                    memoryMb *= 1024;
-                } else if ("K".equals(unit)) {
-                    memoryMb /= 1024;
-                }
+        // 检查权限
+        if (!hasServerPermission(server, accessToken)) {
+            return ResponseEntity.status(403).body(Map.of("error", "权限不足"));
+        }
 
-                // 更新内存配置
-                if (server.getMemoryMb() == null || !server.getMemoryMb().equals(memoryMb)) {
-                    server.setMemoryMb(memoryMb);
-                    needsUpdate = true;
-                    log.info("从启动脚本更新服务器 {} 的内存配置: {}MB", server.getId(), memoryMb);
-                }
+        // 使用锁防止并发操作同一服务器
+        synchronized (getServerLock(serverId)) {
+            // 检查服务器是否正在运行
+            if (Node.getRunningServers().containsKey(serverId)) {
+                return ResponseEntity.badRequest().body(Map.of("error", "无法删除正在运行的服务器"));
             }
 
-            // 提取所有JVM参数（排除 -Xms 和 -Xmx）
-            StringBuilder jvmArgsBuilder = new StringBuilder();
-            String[] parts = script.trim().split("\\s+");
-            boolean foundJar = false;
+            try {
+                // 删除服务器实例
+                serverInstancesService.removeById(serverId);
 
-            for (String part : parts) {
-                // 跳过 java 命令本身
-                if ("java".equalsIgnoreCase(part)) {
-                    continue;
-                }
+                // 清理锁对象
+                SERVER_LOCKS.remove(serverId);
 
-                // 遇到 -jar 后停止收集JVM参数
-                if ("-jar".equalsIgnoreCase(part)) {
-                    foundJar = true;
-                    break;
-                }
+                // 清理日志缓存
+                clearLogCache(serverId);
 
-                // 跳过 -Xms 和 -Xmx 参数（这些已经单独处理）
-                if (part.startsWith("-Xms") || part.startsWith("-Xmx")) {
-                    continue;
-                }
+                // 清理Query连接缓存
+                removeCachedQueryConnection(serverId);
 
-                // 收集其他JVM参数
-                if (part.startsWith("-")) {
-                    if (jvmArgsBuilder.length() > 0) {
-                        jvmArgsBuilder.append(" ");
-                    }
-                    jvmArgsBuilder.append(part);
-                }
+                // 记录操作日志
+                logOperation(accessToken.getMasterId(), OperationType.DELETE_SERVER, true,
+                        Map.of("instanceId", serverId, "instanceName", server.getInstanceName()));
+
+                Map<String, Object> response = new HashMap<>();
+                response.put("success", true);
+                response.put("message", "服务器删除成功");
+
+                return ResponseEntity.ok(response);
+            } catch (Exception e) {
+                log.error("删除服务器时发生错误: {}", serverId, e);
+
+                // 记录操作日志
+                logOperation(accessToken.getMasterId(), OperationType.DELETE_SERVER, false,
+                        Map.of("instanceId", serverId, "instanceName", server.getInstanceName(), "error", e.getMessage()));
+
+                return ResponseEntity.status(500).body(Map.of("error", "删除服务器失败: " + e.getMessage()));
             }
-
-            String extractedJvmArgs = jvmArgsBuilder.toString().trim();
-            if (!extractedJvmArgs.isEmpty()) {
-                // 只有当提取到的参数与当前不同时才更新
-                String currentJvmArgs = server.getJvmArgs();
-                if (currentJvmArgs == null || !currentJvmArgs.equals(extractedJvmArgs)) {
-                    server.setJvmArgs(extractedJvmArgs);
-                    needsUpdate = true;
-                    log.info("从启动脚本更新服务器 {} 的JVM参数: {}", server.getId(), extractedJvmArgs);
-                }
-            }
-
-            // 如果有更新，保存到数据库
-            if (needsUpdate) {
-                server.setUpdatedAt(new Date());
-                serverInstancesService.updateById(server);
-                log.info("服务器 {} 的配置已更新到数据库", server.getId());
-            }
-
-        } catch (Exception e) {
-            log.warn("从启动脚本提取JVM参数时发生错误: {}", e.getMessage());
-            // 不抛出异常，继续启动流程
         }
     }
 
@@ -2306,8 +2291,1094 @@ public class ServerController {
     }
 
     /**
+     * 从启动脚本中提取并更新服务器的JVM参数
+     *
+     * @param server 服务器实例
+     * @param script 启动脚本
+     */
+    private void updateServerJvmArgsFromScript(ServerInstances server, String script) {
+        if (server == null || script == null || script.trim().isEmpty()) {
+            return;
+        }
+
+        try {
+            boolean needsUpdate = false;
+
+            // 提取 -Xmx 参数
+            Pattern xmxPattern = Pattern.compile("-Xmx(\\d+)([MmGgKk]?)");
+            Matcher xmxMatcher = xmxPattern.matcher(script);
+            if (xmxMatcher.find()) {
+                String value = xmxMatcher.group(1);
+                String unit = xmxMatcher.group(2).toUpperCase();
+
+                int memoryMb = Integer.parseInt(value);
+                // 转换为MB
+                if ("G".equals(unit)) {
+                    memoryMb *= 1024;
+                } else if ("K".equals(unit)) {
+                    memoryMb /= 1024;
+                }
+
+                // 更新内存配置
+                if (server.getMemoryMb() == null || !server.getMemoryMb().equals(memoryMb)) {
+                    server.setMemoryMb(memoryMb);
+                    needsUpdate = true;
+                    log.info("从启动脚本更新服务器 {} 的内存配置: {}MB", server.getId(), memoryMb);
+                }
+            }
+
+            // 提取所有JVM参数（排除 -Xms 和 -Xmx）
+            StringBuilder jvmArgsBuilder = new StringBuilder();
+            String[] parts = script.trim().split("\\s+");
+            boolean foundJar = false;
+
+            for (String part : parts) {
+                // 跳过 java 命令本身
+                if ("java".equalsIgnoreCase(part)) {
+                    continue;
+                }
+
+                // 遇到 -jar 后停止收集JVM参数
+                if ("-jar".equalsIgnoreCase(part)) {
+                    foundJar = true;
+                    break;
+                }
+
+                // 跳过 -Xms 和 -Xmx 参数（这些已经单独处理）
+                if (part.startsWith("-Xms") || part.startsWith("-Xmx")) {
+                    continue;
+                }
+
+                // 收集其他JVM参数
+                if (part.startsWith("-")) {
+                    if (jvmArgsBuilder.length() > 0) {
+                        jvmArgsBuilder.append(" ");
+                    }
+                    jvmArgsBuilder.append(part);
+                }
+            }
+
+            String extractedJvmArgs = jvmArgsBuilder.toString().trim();
+            if (!extractedJvmArgs.isEmpty()) {
+                // 只有当提取到的参数与当前不同时才更新
+                String currentJvmArgs = server.getJvmArgs();
+                if (currentJvmArgs == null || !currentJvmArgs.equals(extractedJvmArgs)) {
+                    server.setJvmArgs(extractedJvmArgs);
+                    needsUpdate = true;
+                    log.info("从启动脚本更新服务器 {} 的JVM参数: {}", server.getId(), extractedJvmArgs);
+                }
+            }
+
+            // 如果有更新，保存到数据库
+            if (needsUpdate) {
+                server.setUpdatedAt(new Date());
+                serverInstancesService.updateById(server);
+                log.info("服务器 {} 的配置已更新到数据库", server.getId());
+            }
+
+        } catch (Exception e) {
+            log.warn("从启动脚本提取JVM参数时发生错误: {}", e.getMessage());
+            // 不抛出异常，继续启动流程
+        }
+    }
+
+    /**
+     * 获取服务器在线玩家信息
+     *
+     * @param token    访问令牌
+     * @param serverId 服务器实例ID
+     * @return 在线玩家信息
+     */
+    @GetMapping("/{serverId}/players")
+    public ResponseEntity<Map<String, Object>> getOnlinePlayers(
+            @RequestHeader(Node.Header.X_ENDLESS_TOKEN) String token,
+            @PathVariable Integer serverId) {
+
+        // 验证令牌
+        AccessTokens accessToken = validateToken(token);
+        if (accessToken == null) {
+            return ResponseEntity.status(401).body(Map.of("error", "无效的访问令牌"));
+        }
+
+        // 验证 serverId
+        if (serverId == null || serverId <= 0) {
+            return ResponseEntity.badRequest().body(Map.of("error", "无效的服务器ID"));
+        }
+
+        // 获取服务器实例
+        ServerInstances server = serverInstancesService.getById(serverId);
+        if (server == null) {
+            return ResponseEntity.notFound().build();
+        }
+
+        // 检查权限
+        if (!hasServerPermission(server, accessToken)) {
+            return ResponseEntity.status(403).body(Map.of("error", "权限不足"));
+        }
+
+        // 检查服务器是否正在运行
+        Process process = Node.getRunningServers().get(serverId);
+        if (process == null || !process.isAlive()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "服务器未在运行"));
+        }
+
+        try {
+            Map<String, Object> response = new HashMap<>();
+
+            // 首先尝试使用缓存的Query连接
+            CachedQueryConnection cachedConnection = getCachedQueryConnection(serverId);
+            boolean querySuccess = false;
+
+            if (cachedConnection != null && cachedConnection.isValid()) {
+                try {
+                    log.debug("使用缓存的Query连接获取服务器 {} 玩家信息", serverId);
+                    MinecraftServerQuery.ServerStatus status = cachedConnection.query.getFullStatus();
+
+                    if (status != null) {
+                        response = buildPlayerResponse(serverId, server, status, cachedConnection.host, cachedConnection.port, "query-cached");
+                        querySuccess = true;
+                        log.info("通过缓存Query连接成功获取服务器 {} 的玩家信息，在线玩家: {}/{}",
+                                serverId, status.getOnlinePlayers(), status.getMaxPlayers());
+
+                        // 记录操作日志
+                        logOperation(accessToken.getMasterId(), OperationType.GET_PLAYERS, true,
+                                Map.of("instanceId", serverId, "instanceName", server.getInstanceName(),
+                                        "method", "query-cached", "host", cachedConnection.host,
+                                        "port", cachedConnection.port, "onlinePlayers", status.getOnlinePlayers(),
+                                        "maxPlayers", status.getMaxPlayers()));
+                    }
+                } catch (Exception e) {
+                    log.debug("缓存的Query连接失效: {}", e.getMessage());
+                    // 移除失效的缓存连接
+                    removeCachedQueryConnection(serverId);
+                    cachedConnection = null;
+                }
+            }
+
+            // 如果缓存连接失效或不存在，尝试建立新连接
+            if (!querySuccess) {
+                log.debug("尝试建立新的Query连接获取服务器 {} 玩家信息", serverId);
+
+                // 获取或分配Query端口
+                int queryPort = getOrAssignQueryPort(server);
+
+                String localIp = InetAddress.getLocalHost().getHostAddress();
+                String[] hostsToTry = {localIp, Ipv4Util.LOCAL_IP};
+
+                for (String hostToTry : hostsToTry) {
+                    if (querySuccess) break;
+
+                    MinecraftServerQuery query = new MinecraftServerQuery(hostToTry, queryPort);
+                    try {
+                        log.debug("尝试使用Server Query协议获取服务器 {} 玩家信息 (主机: {}, 端口: {})",
+                                serverId, hostToTry, queryPort);
+
+                        // 使用带重试的连接方法
+                        if (query.connectWithRetry(2, 1000)) {
+                            MinecraftServerQuery.ServerStatus status = query.getFullStatus();
+
+                            if (status != null) {
+                                response = buildPlayerResponse(serverId, server, status, hostToTry, queryPort, "query");
+                                querySuccess = true;
+
+                                // 缓存成功的连接
+                                cacheQueryConnection(serverId, query, hostToTry, queryPort);
+
+                                log.info("通过新Query连接成功获取服务器 {} 的玩家信息 (主机: {}, 端口: {})，在线玩家: {}/{}",
+                                        serverId, hostToTry, queryPort, status.getOnlinePlayers(), status.getMaxPlayers());
+
+                                // 记录操作日志
+                                logOperation(accessToken.getMasterId(), OperationType.GET_PLAYERS, true,
+                                        Map.of("instanceId", serverId, "instanceName", server.getInstanceName(),
+                                                "method", "query", "host", hostToTry, "port", queryPort,
+                                                "onlinePlayers", status.getOnlinePlayers(),
+                                                "maxPlayers", status.getMaxPlayers()));
+                            }
+                        } else {
+                            log.debug("无法连接到服务器 {} 的Query端口 {} (主机: {})", serverId, queryPort, hostToTry);
+                        }
+                    } catch (Exception e) {
+                        log.debug("Server Query协议获取失败 (主机: {}, 端口: {}): {}", hostToTry, queryPort, e.getMessage());
+                    }
+
+                    // 如果连接失败，关闭query对象
+                    if (!querySuccess) {
+                        query.close();
+                    }
+                }
+            }
+
+            // 如果Query协议失败，尝试使用命令方式
+            // if (!querySuccess) {
+            //     log.debug("尝试使用命令方式获取服务器 {} 玩家信息", serverId);
+            //     Map<String, Object> commandResult = getPlayersViaCommand(serverId, server, process);
+            //     if (commandResult != null && Boolean.TRUE.equals(commandResult.get("success"))) {
+            //         response = commandResult;
+            //         querySuccess = true;
+            //         log.info("通过命令方式成功获取服务器 {} 的玩家信息", serverId);
+            //     }
+            // }
+
+            // 如果都失败了，返回错误信息
+            if (!querySuccess) {
+                int gamePort = server.getPort() != null ? server.getPort() : 25565;
+                int queryPort = getOrAssignQueryPort(server);
+
+                response.put("success", false);
+                response.put("error", "无法获取玩家信息");
+                response.put("players", new ArrayList<>());
+                response.put("playerCount", Map.of("online", 0, "max", 0));
+                response.put("troubleshooting", Map.of(
+                        "queryPort", queryPort,
+                        "gamePort", gamePort,
+                        "suggestions", List.of(
+                                "检查server.properties中enable-query=true",
+                                "确认query.port=" + queryPort,
+                                "检查防火墙是否开放Query端口",
+                                "确认服务器版本支持Query协议",
+                                "等待服务器完全启动后再试（启动后等待30秒）"
+                        )
+                ));
+
+                log.warn("无法获取服务器 {} 的玩家信息，Query端口: {}", serverId, queryPort);
+            }
+
+            return ResponseEntity.ok(response);
+
+        } catch (Exception e) {
+            log.error("获取服务器 {} 在线玩家信息时发生错误", serverId, e);
+
+            Map<String, Object> errorResponse = new HashMap<>();
+            errorResponse.put("success", false);
+            errorResponse.put("error", "获取玩家信息失败: " + e.getMessage());
+            errorResponse.put("players", new ArrayList<>());
+            errorResponse.put("playerCount", Map.of("online", 0, "max", 0));
+
+            return ResponseEntity.status(500).body(errorResponse);
+        }
+    }
+
+    /**
+     * 诊断Query连接问题
+     *
+     * @param token    访问令牌
+     * @param serverId 服务器实例ID
+     * @return 诊断结果
+     */
+    @GetMapping("/{serverId}/query-diagnostic")
+    public ResponseEntity<Map<String, Object>> queryDiagnostic(
+            @RequestHeader(Node.Header.X_ENDLESS_TOKEN) String token,
+            @PathVariable Integer serverId) {
+
+        // 验证令牌
+        AccessTokens accessToken = validateToken(token);
+        if (accessToken == null) {
+            return ResponseEntity.status(401).body(Map.of("error", "无效的访问令牌"));
+        }
+
+        // 获取服务器实例
+        ServerInstances server = serverInstancesService.getById(serverId);
+        if (server == null) {
+            return ResponseEntity.notFound().build();
+        }
+
+        // 检查权限
+        if (!hasServerPermission(server, accessToken)) {
+            return ResponseEntity.status(403).body(Map.of("error", "权限不足"));
+        }
+
+        Map<String, Object> diagnostic = new HashMap<>();
+
+        try {
+            int gamePort = getServerPort(server);
+            int queryPort = getOrAssignQueryPort(server);
+
+            diagnostic.put("serverId", serverId);
+            diagnostic.put("gamePort", gamePort);
+            diagnostic.put("queryPort", queryPort);
+            diagnostic.put("serverRunning", Node.getRunningServers().containsKey(serverId));
+
+            // 检查server.properties文件
+            File serverPropertiesFile = new File(server.getFilePath(), "server.properties");
+            Map<String, Object> propertiesInfo = new HashMap<>();
+            propertiesInfo.put("exists", serverPropertiesFile.exists());
+
+            if (serverPropertiesFile.exists()) {
+                try {
+                    Properties properties = new Properties();
+                    try (FileInputStream fis = new FileInputStream(serverPropertiesFile)) {
+                        properties.load(fis);
+                    }
+                    propertiesInfo.put("enable-query", properties.getProperty("enable-query"));
+                    propertiesInfo.put("query.port", properties.getProperty("query.port"));
+                    propertiesInfo.put("server-port", properties.getProperty("server-port"));
+                } catch (Exception e) {
+                    propertiesInfo.put("readError", e.getMessage());
+                }
+            }
+            diagnostic.put("serverProperties", propertiesInfo);
+
+            // 测试Query连接
+            // 获取本机IP地址
+            String localIp = InetAddress.getLocalHost().getHostAddress();
+            Map<String, Object> connectionTests = new HashMap<>();
+            String[] hostsToTest = {localIp, Ipv4Util.LOCAL_IP};
+
+            for (String host : hostsToTest) {
+                try {
+                    Map<String, Object> testResult = MinecraftServerQuery.detailedConnectionTest(host, queryPort);
+                    connectionTests.put(host, testResult);
+                } catch (Exception e) {
+                    Map<String, Object> errorResult = new HashMap<>();
+                    errorResult.put("host", host);
+                    errorResult.put("port", queryPort);
+                    errorResult.put("error", e.getMessage());
+                    errorResult.put("socketCreated", false);
+                    connectionTests.put(host, errorResult);
+                }
+            }
+            diagnostic.put("connectionTests", connectionTests);
+
+            // 提供建议
+            List<String> suggestions = new ArrayList<>();
+            if (!serverPropertiesFile.exists()) {
+                suggestions.add("server.properties文件不存在，请重启服务器以自动创建");
+            } else {
+                Properties props = new Properties();
+                try (FileInputStream fis = new FileInputStream(serverPropertiesFile)) {
+                    props.load(fis);
+                    if (!"true".equals(props.getProperty("enable-query"))) {
+                        suggestions.add("在server.properties中设置 enable-query=true");
+                    }
+                    if (!String.valueOf(queryPort).equals(props.getProperty("query.port"))) {
+                        suggestions.add("在server.properties中设置 query.port=" + queryPort);
+                    }
+                } catch (Exception e) {
+                    suggestions.add("无法读取server.properties文件: " + e.getMessage());
+                }
+            }
+
+            if (!Node.getRunningServers().containsKey(serverId)) {
+                suggestions.add("服务器未运行，请先启动服务器");
+            }
+
+            boolean anyConnectionWorked = connectionTests.values().stream()
+                    .anyMatch(test -> Boolean.TRUE.equals(((Map<?, ?>) test).get("handshakeSuccess")));
+
+            if (!anyConnectionWorked) {
+                suggestions.add("等待服务器完全启动后再试（启动后等待30秒）");
+                suggestions.add("检查防火墙是否开放UDP端口 " + queryPort);
+                suggestions.add("尝试重启服务器以应用Query配置");
+            }
+
+            diagnostic.put("suggestions", suggestions);
+            diagnostic.put("timestamp", System.currentTimeMillis());
+
+            return ResponseEntity.ok(diagnostic);
+
+        } catch (Exception e) {
+            log.error("Query诊断失败", e);
+            diagnostic.put("error", "诊断失败: " + e.getMessage());
+            return ResponseEntity.status(500).body(diagnostic);
+        }
+    }
+
+    /**
+     * 对玩家执行操作
+     *
+     * @param token      访问令牌
+     * @param serverId   服务器实例ID
+     * @param playerName 玩家名称
+     * @param request    操作请求
+     * @return 操作结果
+     */
+    @PostMapping("/{serverId}/players/{playerName}/action")
+    public ResponseEntity<Map<String, Object>> playerAction(
+            @RequestHeader(Node.Header.X_ENDLESS_TOKEN) String token,
+            @PathVariable Integer serverId,
+            @PathVariable String playerName,
+            @RequestBody Map<String, String> request) {
+
+        // 验证令牌
+        AccessTokens accessToken = validateToken(token);
+        if (accessToken == null) {
+            return ResponseEntity.status(401).body(Map.of("error", "无效的访问令牌"));
+        }
+
+        // 验证参数
+        if (serverId == null || serverId <= 0) {
+            return ResponseEntity.badRequest().body(Map.of("error", "无效的服务器ID"));
+        }
+
+        if (playerName == null || playerName.trim().isEmpty()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "玩家名称不能为空"));
+        }
+
+        if (request == null || !request.containsKey("action")) {
+            return ResponseEntity.badRequest().body(Map.of("error", "操作类型不能为空"));
+        }
+
+        // 获取服务器实例
+        ServerInstances server = serverInstancesService.getById(serverId);
+        if (server == null) {
+            return ResponseEntity.notFound().build();
+        }
+
+        // 检查权限
+        if (!hasServerPermission(server, accessToken)) {
+            return ResponseEntity.status(403).body(Map.of("error", "权限不足"));
+        }
+
+        // 检查服务器是否正在运行
+        Process process = Node.getRunningServers().get(serverId);
+        if (process == null || !process.isAlive()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "服务器未在运行"));
+        }
+
+        String action = request.get("action");
+        String reason = request.getOrDefault("reason", "");
+
+        // 构建命令
+        String command = buildPlayerCommand(action, playerName, reason);
+        if (command == null) {
+            return ResponseEntity.badRequest().body(Map.of("error", "不支持的操作类型: " + action));
+        }
+
+        // 使用锁防止并发命令发送
+        synchronized (getServerLock(serverId)) {
+            try {
+                OutputStreamWriter writer;
+                if (Node.getServerWriters().containsKey(serverId)) {
+                    writer = Node.getServerWriters().get(serverId);
+                } else {
+                    OutputStream outputStream = process.getOutputStream();
+                    if (outputStream == null) {
+                        return ResponseEntity.status(500).body(Map.of("error", "无法获取进程输出流"));
+                    }
+                    writer = new OutputStreamWriter(outputStream, StandardCharsets.UTF_8);
+                    Node.getServerWriters().put(serverId, writer);
+                }
+
+                // 发送命令
+                writer.write(command + "\n");
+                writer.flush();
+
+                log.info("对玩家 {} 执行操作: {} (服务器: {})", playerName, action, serverId);
+
+                // 记录操作日志
+                logOperation(accessToken.getMasterId(), OperationType.PLAYER_ACTION, true,
+                        Map.of("instanceId", serverId, "instanceName", server.getInstanceName(),
+                                "action", action, "player", playerName, "command", command));
+
+                Map<String, Object> response = new HashMap<>();
+                response.put("success", true);
+                response.put("message", "操作执行成功");
+                response.put("action", action);
+                response.put("player", playerName);
+                response.put("command", command);
+
+                return ResponseEntity.ok(response);
+
+            } catch (Exception e) {
+                log.error("对玩家 {} 执行操作 {} 时发生错误 (服务器: {})", playerName, action, serverId, e);
+
+                logOperation(accessToken.getMasterId(), OperationType.PLAYER_ACTION, false,
+                        Map.of("instanceId", serverId, "instanceName", server.getInstanceName(),
+                                "action", action, "player", playerName, "error", e.getMessage()));
+
+                return ResponseEntity.status(500).body(Map.of("error", "操作执行失败: " + e.getMessage()));
+            }
+        }
+    }
+
+    /**
+     * 构建玩家操作命令
+     */
+    private String buildPlayerCommand(String action, String playerName, String reason) {
+        switch (action.toLowerCase()) {
+            case "kick":
+                return reason.isEmpty() ?
+                        "kick " + playerName :
+                        "kick " + playerName + " " + reason;
+            case "ban":
+                return reason.isEmpty() ?
+                        "ban " + playerName :
+                        "ban " + playerName + " " + reason;
+            case "ban-ip":
+                return reason.isEmpty() ?
+                        "ban-ip " + playerName :
+                        "ban-ip " + playerName + " " + reason;
+            case "pardon":
+                return "pardon " + playerName;
+            case "pardon-ip":
+                return "pardon-ip " + playerName;
+            case "op":
+                return "op " + playerName;
+            case "deop":
+                return "deop " + playerName;
+            case "whitelist-add":
+                return "whitelist add " + playerName;
+            case "whitelist-remove":
+                return "whitelist remove " + playerName;
+            case "gamemode-creative":
+                return "gamemode creative " + playerName;
+            case "gamemode-survival":
+                return "gamemode survival " + playerName;
+            case "gamemode-adventure":
+                return "gamemode adventure " + playerName;
+            case "gamemode-spectator":
+                return "gamemode spectator " + playerName;
+            case "tp-to-spawn":
+                return "tp " + playerName + " ~ ~ ~";
+            default:
+                return null;
+        }
+    }
+
+    /**
+     * 获取或分配Query端口
+     *
+     * @param server 服务器实例
+     * @return Query端口号
+     */
+    private int getOrAssignQueryPort(ServerInstances server) {
+        if (server == null) {
+            return QUERY_PORT_RANGE_START;
+        }
+
+        // 首先检查server.properties中是否已配置Query端口
+        File serverPropertiesFile = new File(server.getFilePath(), "server.properties");
+        if (serverPropertiesFile.exists()) {
+            try {
+                Properties properties = new Properties();
+                try (FileInputStream fis = new FileInputStream(serverPropertiesFile)) {
+                    properties.load(fis);
+                }
+                String queryPortStr = properties.getProperty("query.port");
+                if (queryPortStr != null && !queryPortStr.trim().isEmpty()) {
+                    try {
+                        int existingPort = Integer.parseInt(queryPortStr.trim());
+                        if (existingPort > 0 && existingPort <= 65535) {
+                            log.debug("服务器 {} 使用已配置的Query端口: {}", server.getId(), existingPort);
+                            return existingPort;
+                        }
+                    } catch (NumberFormatException e) {
+                        log.debug("无效的Query端口配置: {}", queryPortStr);
+                    }
+                }
+            } catch (Exception e) {
+                log.debug("读取server.properties失败: {}", e.getMessage());
+            }
+        }
+
+        // 如果没有配置或配置无效，分配一个可用端口
+        return findAvailableQueryPort();
+    }
+
+    /**
+     * 获取服务器端口号
+     **/
+    private int getServerPort(ServerInstances server) {
+        File serverPropertiesFile = new File(server.getFilePath(), "server.properties");
+        if (serverPropertiesFile.exists()) {
+            try {
+                Properties properties = new Properties();
+                try (FileInputStream fis = new FileInputStream(serverPropertiesFile)) {
+                    properties.load(fis);
+                }
+                String serverPortStr = properties.getProperty("server.port");
+                if (serverPortStr != null && !serverPortStr.trim().isEmpty()) {
+                    try {
+                        int existingPort = Integer.parseInt(serverPortStr.trim());
+                        if (existingPort > 0 && existingPort <= 65535) {
+                            log.debug("服务器 {} 使用已配置的服务器端口: {}", server.getId(), existingPort);
+                            return existingPort;
+                        }
+                    } catch (NumberFormatException e) {
+                        log.debug("无效的服务器端口配置: {}", serverPortStr);
+                    }
+                }
+            } catch (Exception e) {
+                log.debug("读取server.properties失败: {}", e.getMessage());
+            }
+        }
+        return 25565;
+    }
+
+    /**
+     * 查找可用的Query端口
+     *
+     * @return 可用的端口号
+     */
+    private int findAvailableQueryPort() {
+        // 使用随机起始点避免端口冲突
+        Random random = new Random();
+        int startPort = QUERY_PORT_RANGE_START + random.nextInt(QUERY_PORT_RANGE_END - QUERY_PORT_RANGE_START);
+
+        // 从随机起始点开始查找可用端口
+        for (int i = 0; i < (QUERY_PORT_RANGE_END - QUERY_PORT_RANGE_START); i++) {
+            int port = startPort + i;
+            if (port > QUERY_PORT_RANGE_END) {
+                port = QUERY_PORT_RANGE_START + (port - QUERY_PORT_RANGE_END - 1);
+            }
+
+            if (isPortAvailable(port)) {
+                log.debug("分配可用Query端口: {}", port);
+                return port;
+            }
+        }
+
+        // 如果都不可用，返回默认端口
+        log.warn("无法找到可用的Query端口，使用默认端口: {}", QUERY_PORT_RANGE_START);
+        return QUERY_PORT_RANGE_START;
+    }
+
+    /**
+     * 检查端口是否可用
+     *
+     * @param port 端口号
+     * @return 是否可用
+     */
+    private boolean isPortAvailable(int port) {
+        try (java.net.ServerSocket serverSocket = new java.net.ServerSocket(port)) {
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /**
+     * 获取缓存的Query连接
+     *
+     * @param serverId 服务器ID
+     * @return 缓存的连接，如果不存在或已过期则返回null
+     */
+    private CachedQueryConnection getCachedQueryConnection(Integer serverId) {
+        if (serverId == null) {
+            return null;
+        }
+
+        CachedQueryConnection cached = QUERY_CONNECTION_CACHE.get(serverId);
+        if (cached != null) {
+            if (System.currentTimeMillis() - cached.timestamp < QUERY_CONNECTION_TTL_MS) {
+                return cached;
+            } else {
+                // 缓存已过期，移除并关闭连接
+                removeCachedQueryConnection(serverId);
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 缓存Query连接
+     *
+     * @param serverId 服务器ID
+     * @param query    Query对象
+     * @param host     主机地址
+     * @param port     端口号
+     */
+    private void cacheQueryConnection(Integer serverId, MinecraftServerQuery query, String host, int port) {
+        if (serverId == null || query == null) {
+            return;
+        }
+
+        // 移除旧的缓存连接
+        removeCachedQueryConnection(serverId);
+
+        // 添加新的缓存连接
+        CachedQueryConnection cached = new CachedQueryConnection(query, host, port, System.currentTimeMillis());
+        QUERY_CONNECTION_CACHE.put(serverId, cached);
+
+        log.debug("缓存服务器 {} 的Query连接 (主机: {}, 端口: {})", serverId, host, port);
+    }
+
+    /**
+     * 移除缓存的Query连接
+     *
+     * @param serverId 服务器ID
+     */
+    private void removeCachedQueryConnection(Integer serverId) {
+        if (serverId == null) {
+            return;
+        }
+
+        CachedQueryConnection cached = QUERY_CONNECTION_CACHE.remove(serverId);
+        if (cached != null && cached.query != null) {
+            try {
+                cached.query.close();
+                log.debug("关闭服务器 {} 的缓存Query连接", serverId);
+            } catch (Exception e) {
+                log.debug("关闭Query连接时发生错误: {}", e.getMessage());
+            }
+        }
+    }
+
+    /**
+     * 清理所有Query连接
+     */
+    private void cleanupQueryConnections() {
+        log.info("清理所有Query连接缓存...");
+
+        for (Map.Entry<Integer, CachedQueryConnection> entry : QUERY_CONNECTION_CACHE.entrySet()) {
+            try {
+                if (entry.getValue() != null && entry.getValue().query != null) {
+                    entry.getValue().query.close();
+                }
+            } catch (Exception e) {
+                log.debug("清理Query连接时发生错误: {}", e.getMessage());
+            }
+        }
+
+        QUERY_CONNECTION_CACHE.clear();
+        log.info("Query连接缓存清理完成");
+    }
+
+    /**
+     * 构建玩家信息响应
+     *
+     * @param serverId 服务器ID
+     * @param server   服务器实例
+     * @param status   服务器状态
+     * @param host     主机地址
+     * @param port     端口号
+     * @param method   获取方法
+     * @return 响应Map
+     */
+    private Map<String, Object> buildPlayerResponse(Integer serverId, ServerInstances server,
+                                                    MinecraftServerQuery.ServerStatus status,
+                                                    String host, int port, String method) {
+        Map<String, Object> response = new HashMap<>();
+
+        response.put("success", true);
+        response.put("serverId", serverId);
+        response.put("method", method);
+        response.put("queryHost", host);
+        response.put("queryPort", port);
+        response.put("serverInfo", Map.of(
+                "motd", status.getMotd() != null ? status.getMotd() : "",
+                "version", status.getVersion() != null ? status.getVersion() : "",
+                "gameType", status.getGameType() != null ? status.getGameType() : "",
+                "map", status.getMap() != null ? status.getMap() : "",
+                "plugins", status.getPlugins() != null ? status.getPlugins() : ""
+        ));
+
+        // 玩家信息
+        List<String> playerNames = status.getPlayerList();
+        List<Map<String, Object>> players = new ArrayList<>();
+
+        for (String playerName : playerNames) {
+            Map<String, Object> playerInfo = new HashMap<>();
+            playerInfo.put("name", playerName);
+            playerInfo.put("joinTime", System.currentTimeMillis()); // 暂时使用当前时间
+            players.add(playerInfo);
+        }
+
+        response.put("players", players);
+        response.put("playerCount", Map.of(
+                "online", status.getOnlinePlayers(),
+                "max", status.getMaxPlayers()
+        ));
+
+        return response;
+    }
+
+    /**
+     * 确保服务器启用Query功能
+     *
+     * @param server 服务器实例
+     */
+    private void ensureQueryEnabled(ServerInstances server) {
+        if (server == null || server.getFilePath() == null) {
+            return;
+        }
+
+        try {
+            File serverPropertiesFile = new File(server.getFilePath(), "server.properties");
+            if (!serverPropertiesFile.exists()) {
+                log.info("服务器 {} 的 server.properties 文件不存在，创建默认配置", server.getId());
+                createDefaultServerProperties(serverPropertiesFile, server);
+                return;
+            }
+
+            // 读取现有配置
+            Properties properties = new Properties();
+            try (FileInputStream fis = new FileInputStream(serverPropertiesFile)) {
+                properties.load(fis);
+            }
+
+            // 检查并设置Query相关配置
+            boolean needUpdate = false;
+
+            // 启用Query
+            if (!"true".equals(properties.getProperty("enable-query"))) {
+                properties.setProperty("enable-query", "true");
+                needUpdate = true;
+                log.debug("服务器 {} 启用Query功能", server.getId());
+            }
+
+            // 设置Query端口（如果没有配置则分配一个）
+            int gamePort = getServerPort(server);
+            String currentQueryPort = properties.getProperty("query.port");
+            int queryPort;
+
+            if (currentQueryPort != null && !currentQueryPort.trim().isEmpty()) {
+                try {
+                    queryPort = Integer.parseInt(currentQueryPort.trim());
+                    if (queryPort <= 0 || queryPort > 65535) {
+                        queryPort = findAvailableQueryPort();
+                        properties.setProperty("query.port", String.valueOf(queryPort));
+                        needUpdate = true;
+                        log.debug("服务器 {} 的Query端口配置无效，重新分配: {}", server.getId(), queryPort);
+                    }
+                } catch (NumberFormatException e) {
+                    queryPort = findAvailableQueryPort();
+                    properties.setProperty("query.port", String.valueOf(queryPort));
+                    needUpdate = true;
+                    log.debug("服务器 {} 的Query端口配置格式错误，重新分配: {}", server.getId(), queryPort);
+                }
+            } else {
+                queryPort = findAvailableQueryPort();
+                properties.setProperty("query.port", String.valueOf(queryPort));
+                needUpdate = true;
+                log.debug("服务器 {} 设置Query端口: {}", server.getId(), queryPort);
+            }
+
+            // 如果需要更新，写回文件
+            if (needUpdate) {
+                // 备份原文件
+                File backupFile = new File(serverPropertiesFile.getParent(), "server.properties.backup");
+                try {
+                    Files.copy(serverPropertiesFile.toPath(), backupFile.toPath(),
+                            StandardCopyOption.REPLACE_EXISTING);
+                } catch (Exception e) {
+                    log.warn("备份server.properties失败: {}", e.getMessage());
+                }
+
+                try (FileOutputStream fos = new FileOutputStream(serverPropertiesFile)) {
+                    properties.store(fos, "Updated by Endless-Node to enable Query - " + new Date());
+                }
+                log.info("已为服务器 {} 启用Query功能，游戏端口: {}, Query端口: {}", server.getId(), gamePort, queryPort);
+            } else {
+                log.debug("服务器 {} 的Query配置已正确", server.getId());
+            }
+
+        } catch (Exception e) {
+            log.error("配置服务器 {} 的Query功能时发生错误", server.getId(), e);
+        }
+    }
+
+    /**
+     * 创建默认的server.properties文件
+     */
+    private void createDefaultServerProperties(File serverPropertiesFile, ServerInstances server) {
+        try {
+            Properties properties = new Properties();
+
+            // 基本配置
+            int gamePort = getServerPort(server);
+            int queryPort = findAvailableQueryPort();
+
+            properties.setProperty("server-port", String.valueOf(gamePort));
+            properties.setProperty("enable-query", "true");
+            properties.setProperty("query.port", String.valueOf(queryPort));
+            properties.setProperty("gamemode", "survival");
+            properties.setProperty("difficulty", "easy");
+            properties.setProperty("max-players", "20");
+            properties.setProperty("online-mode", "true");
+            properties.setProperty("white-list", "false");
+            properties.setProperty("motd", "A Minecraft Server");
+
+            try (FileOutputStream fos = new FileOutputStream(serverPropertiesFile)) {
+                properties.store(fos, "Default server.properties created by Endless-Node - " + new Date());
+            }
+
+            log.info("已为服务器 {} 创建默认server.properties，游戏端口: {}, Query端口: {}",
+                    server.getId(), gamePort, queryPort);
+
+        } catch (Exception e) {
+            log.error("创建默认server.properties失败", e);
+        }
+    }
+
+    /**
+     * 通过命令方式获取玩家信息（备用方法）
+     */
+    private Map<String, Object> getPlayersViaCommand(Integer serverId, ServerInstances server, Process process) {
+        try {
+            // 发送list命令
+            OutputStreamWriter writer;
+            if (Node.getServerWriters().containsKey(serverId)) {
+                writer = Node.getServerWriters().get(serverId);
+            } else {
+                OutputStream outputStream = process.getOutputStream();
+                if (outputStream == null) {
+                    return null;
+                }
+                writer = new OutputStreamWriter(outputStream, StandardCharsets.UTF_8);
+                Node.getServerWriters().put(serverId, writer);
+            }
+
+            // 发送list命令
+            writer.write("list\n");
+            writer.flush();
+
+            Thread.sleep(1000);
+
+            // 从控制台日志缓存中查找最近的list命令输出
+            List<String> recentLogs = getLogCache(serverId);
+            String listOutput = null;
+
+            // 从最新的日志中查找list命令的输出
+            for (int i = recentLogs.size() - 1; i >= Math.max(0, recentLogs.size() - 10); i--) {
+                String log = recentLogs.get(i);
+                if (log.contains("players online") || log.contains("There are") ||
+                        log.matches(".*\\d+/\\d+.*players.*")) {
+                    listOutput = log;
+                    break;
+                }
+            }
+
+            if (listOutput != null) {
+                return parseListCommandOutput(listOutput, serverId, server);
+            }
+
+        } catch (Exception e) {
+            log.debug("通过命令获取玩家信息失败: {}", e.getMessage());
+        }
+
+        return null;
+    }
+
+    /**
+     * 解析list命令的输出
+     */
+    private Map<String, Object> parseListCommandOutput(String output, Integer serverId, ServerInstances server) {
+        try {
+            Map<String, Object> response = new HashMap<>();
+            List<Map<String, Object>> players = new ArrayList<>();
+
+            // 解析不同格式的list命令输出
+            // 格式1: "There are 2 of a max of 20 players online: player1, player2"
+            // 格式2: "There are 2/20 players online: player1, player2"
+            // 格式3: "Players online (2/20): player1, player2"
+
+            Pattern pattern1 = Pattern.compile(
+                    "There are (\\d+) of a max of (\\d+) players online:?\\s*(.*)");
+            Pattern pattern2 = Pattern.compile(
+                    "There are (\\d+)/(\\d+) players online:?\\s*(.*)");
+            Pattern pattern3 = Pattern.compile(
+                    "Players online \\((\\d+)/(\\d+)\\):?\\s*(.*)");
+
+            Matcher matcher = pattern1.matcher(output);
+            if (!matcher.find()) {
+                matcher = pattern2.matcher(output);
+                if (!matcher.find()) {
+                    matcher = pattern3.matcher(output);
+                }
+            }
+
+            if (matcher.find()) {
+                int onlinePlayers = Integer.parseInt(matcher.group(1));
+                int maxPlayers = Integer.parseInt(matcher.group(2));
+                String playerList = matcher.group(3).trim();
+
+                // 解析玩家名称
+                if (!playerList.isEmpty() && !playerList.equals("")) {
+                    String[] playerNames = playerList.split(",\\s*");
+                    for (String playerName : playerNames) {
+                        playerName = playerName.trim();
+                        if (!playerName.isEmpty()) {
+                            Map<String, Object> playerInfo = new HashMap<>();
+                            playerInfo.put("name", playerName);
+                            playerInfo.put("joinTime", System.currentTimeMillis());
+                            players.add(playerInfo);
+                        }
+                    }
+                }
+
+                response.put("success", true);
+                response.put("serverId", serverId);
+                response.put("method", "command");
+                response.put("serverInfo", Map.of(
+                        "motd", server.getInstanceName() != null ? server.getInstanceName() : "",
+                        "version", server.getVersion() != null ? server.getVersion() : "",
+                        "coreType", server.getCoreType() != null ? server.getCoreType() : ""
+                ));
+                response.put("players", players);
+                response.put("playerCount", Map.of("online", onlinePlayers, "max", maxPlayers));
+
+                return response;
+            }
+
+        } catch (Exception e) {
+            log.debug("解析list命令输出失败: {}", e.getMessage());
+        }
+
+        return null;
+    }
+
+    /**
      * 缓存的进程信息
      */
     private record CachedProcessInfo(Map<String, Object> data, long timestamp) {
+    }
+
+    /**
+     * 缓存的Query连接信息
+     */
+    private static class CachedQueryConnection {
+        final MinecraftServerQuery query;
+        final String host;
+        final int port;
+        final long timestamp;
+
+        public CachedQueryConnection(MinecraftServerQuery query, String host, int port, long timestamp) {
+            this.query = query;
+            this.host = host;
+            this.port = port;
+            this.timestamp = timestamp;
+        }
+
+        /**
+         * 检查连接是否有效
+         */
+        public boolean isValid() {
+            if (query == null) {
+                return false;
+            }
+
+            // 检查是否超时
+            return System.currentTimeMillis() - timestamp < QUERY_CONNECTION_TTL_MS;
+
+        }
+    }
+
+    /**
+     * 玩家信息类
+     */
+    @Data
+    public static class PlayerInfo {
+        private String playerName;
+        private String uuid;
+        private long joinTime;
+        private String ipAddress;
+
+        public PlayerInfo(String playerName, String uuid, long joinTime, String ipAddress) {
+            this.playerName = playerName;
+            this.uuid = uuid;
+            this.joinTime = joinTime;
+            this.ipAddress = ipAddress;
+        }
+
+        public Map<String, Object> toMap() {
+            Map<String, Object> map = new HashMap<>();
+            map.put("playerName", playerName);
+            map.put("uuid", uuid);
+            map.put("joinTime", new Date(joinTime));
+            map.put("ipAddress", ipAddress);
+            map.put("onlineTime", System.currentTimeMillis() - joinTime);
+            return map;
+        }
     }
 }
