@@ -94,9 +94,35 @@ endless:
     max-instances: 20  # 最大允许的服务器实例数
     default-memory-mb: 1024  # 默认分配给每个服务器的内存（MB）
     default-jvm-args: -XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=200  # 默认JVM参数
+
+  # 文件操作限制（防止路径穿越）
+  files:
+    root: .  # 文件操作根目录
+
+  # 命令限制
+  security:
+    blocked-mc-commands: op,stop
+
+  # SQLite 并发优化
+  sqlite:
+    enable-wal: true
+    busy-timeout-ms: 5000
+
+  # 自动备份（默认关闭）
+  backup:
+    enabled: false
+    cron: "0 0 */6 * * *"
+    root: "./backups"
+    keep: 5
+    include: "world,world_nether,world_the_end,server.properties"
 ```
 
 ## API 文档
+
+项目集成了 OpenAPI（springdoc），启动后可访问：
+
+- `GET /v3/api-docs`
+- `GET /swagger-ui/index.html`
 
 ### 认证 API
 
@@ -444,6 +470,15 @@ X-Endless-Token: your_access_token
   "success": true,
   "message": "Command sent successfully"
 }
+```
+
+## Docker
+
+仓库提供 `Dockerfile`（多阶段构建），示例：
+
+```bash
+docker build -t endless-node .
+docker run --rm -p 8085:8085 -v $(pwd)/config:/app/config -v $(pwd)/backups:/app/backups endless-node
 ```
 
 ## 许可证
