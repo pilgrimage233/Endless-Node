@@ -53,3 +53,9 @@ mybatis-plus:
   global-config:
     db-config:
       id-type: auto  # 主键自增
+
+# 应用自定义配置（会被复制到 config/application.yml，支持 ENV 覆盖）
+endless:
+  files:
+    # 文件操作根目录（相对路径相对于启动目录）；建议指向服务器数据目录
+    root: .
