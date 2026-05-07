@@ -62,3 +62,18 @@ endless:
   security:
     # 通过 /api/servers/{id}/command 发送时禁止的敏感命令（不含前导 /，英文逗号分隔）
     blocked-mc-commands: op,stop
+  sqlite:
+    enable-wal: true
+    busy-timeout-ms: 5000
+  backup:
+    enabled: false
+    cron: "0 0 */6 * * *"
+    root: "./backups"
+    keep: 5
+    include: "world,world_nether,world_the_end,server.properties"
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
