@@ -59,3 +59,6 @@ endless:
   files:
     # 文件操作根目录（相对路径相对于启动目录）；建议指向服务器数据目录
     root: .
+  security:
+    # 通过 /api/servers/{id}/command 发送时禁止的敏感命令（不含前导 /，英文逗号分隔）
+    blocked-mc-commands: op,stop
