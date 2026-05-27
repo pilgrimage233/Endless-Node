@@ -6,7 +6,7 @@ Minecraft 服务器。
 ## 功能特性
 
 - **认证与注册**：主控端可以通过 IP+端口+密钥与节点绑定
-- **文件操作**：支持上传、下载、删除、列表等文件操作，主控端可以指定任意路径
+- **文件操作**：支持上传、下载、删除、列表等文件操作（限制在 `endless.files.root` 根目录内）
 - **服务器实例管理**：主控端可以远程创建、启动、停止、删除服务器实例
 - **自定义启动脚本**：主控端可以指定自定义的启动和停止脚本
 - **控制台访问**：可以查看服务器控制台输出
@@ -94,9 +94,35 @@ endless:
     max-instances: 20  # 最大允许的服务器实例数
     default-memory-mb: 1024  # 默认分配给每个服务器的内存（MB）
     default-jvm-args: -XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=200  # 默认JVM参数
+
+  # 文件操作限制（防止路径穿越）
+  files:
+    root: .  # 文件操作根目录
+
+  # 命令限制
+  security:
+    blocked-mc-commands: op,stop
+
+  # SQLite 并发优化
+  sqlite:
+    enable-wal: true
+    busy-timeout-ms: 5000
+
+  # 自动备份（默认关闭）
+  backup:
+    enabled: false
+    cron: "0 0 */6 * * *"
+    root: "./backups"
+    keep: 5
+    include: "world,world_nether,world_the_end,server.properties"
 ```
 
 ## API 文档
+
+项目集成了 OpenAPI（springdoc），启动后可访问：
+
+- `GET /v3/api-docs`
+- `GET /swagger-ui/index.html`
 
 ### 认证 API
 
@@ -152,6 +178,8 @@ X-Endless-Token: your_access_token
 ```
 
 ### 文件操作 API
+
+注意：所有 `path` 参数都会被限制在配置的 `endless.files.root` 根目录内，用于防御路径穿越。
 
 #### 获取文件列表
 
@@ -444,6 +472,15 @@ X-Endless-Token: your_access_token
   "success": true,
   "message": "Command sent successfully"
 }
+```
+
+## Docker
+
+仓库提供 `Dockerfile`（多阶段构建），示例：
+
+```bash
+docker build -t endless-node .
+docker run --rm -p 8085:8085 -v $(pwd)/config:/app/config -v $(pwd)/backups:/app/backups endless-node
 ```
 
 ## 许可证

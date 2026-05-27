@@ -9,12 +9,15 @@ import cc.endmc.endlessnode.manage.Node;
 import cc.endmc.endlessnode.service.AccessTokensService;
 import cc.endmc.endlessnode.service.OperationLogsService;
 import cc.endmc.endlessnode.service.ServerInstancesService;
+import cc.endmc.endlessnode.util.CommandLineParser;
+import cc.endmc.endlessnode.util.CommandRestrictions;
 import cc.endmc.endlessnode.util.MinecraftServerQuery;
 import cn.hutool.core.net.Ipv4Util;
 import jakarta.annotation.PreDestroy;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
 import org.springframework.messaging.handler.annotation.MessageMapping;
 import org.springframework.messaging.handler.annotation.Payload;
@@ -79,6 +82,9 @@ public class ServerController {
     });
     private static final long PROCESS_INFO_CACHE_TTL_MS = 5000L;
     private static final ConcurrentHashMap<Long, CachedProcessInfo> PROCESS_INFO_CACHE = new ConcurrentHashMap<>();
+
+    @Value("${endless.security.blocked-mc-commands:op,stop}")
+    private String blockedMcCommands;
 
     // 启动控制台消息派发线程和Query连接清理任务
     static {
@@ -1205,6 +1211,11 @@ public class ServerController {
         if (command == null || command.trim().isEmpty()) {
             return ResponseEntity.badRequest().body(Map.of("error", "命令不能为空"));
         }
+        try {
+            command = CommandRestrictions.sanitizeMinecraftConsoleCommand(command, parseBlockedCommands());
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.status(403).body(Map.of("error", e.getMessage()));
+        }
 
         // 使用锁防止并发命令发送
         synchronized (getServerLock(serverId)) {
@@ -1683,16 +1694,12 @@ public class ServerController {
 
         ProcessBuilder processBuilder;
         if (osName.toLowerCase().contains("windows")) {
-            List<String> windowsCommand = new ArrayList<>();
-            windowsCommand.add("cmd");
-            windowsCommand.add("/c");
-            windowsCommand.add("cd /d \"" + workingDir.getAbsolutePath() + "\" && " + trimmedScript);
-            processBuilder = new ProcessBuilder(windowsCommand);
+            // Windows 下通过 cmd /c 执行时必须过滤元字符，避免命令拼接注入
+            CommandRestrictions.validateWindowsCmdScript(trimmedScript);
+            processBuilder = new ProcessBuilder("cmd", "/c", trimmedScript);
         } else {
-            List<String> unixCommand = new ArrayList<>();
-            unixCommand.add("bash");
-            unixCommand.add("-c");
-            unixCommand.add("cd \"" + workingDir.getAbsolutePath() + "\" && " + trimmedScript);
+            // Unix-like 系统下避免使用 shell（bash -c），改为解析为参数列表直接执行
+            List<String> unixCommand = CommandLineParser.parse(trimmedScript);
             processBuilder = new ProcessBuilder(unixCommand);
         }
 
@@ -1711,6 +1718,21 @@ public class ServerController {
 
         // 启动进程
         return processBuilder.start();
+    }
+
+    private Set<String> parseBlockedCommands() {
+        if (blockedMcCommands == null || blockedMcCommands.trim().isEmpty()) {
+            return Set.of();
+        }
+        String[] parts = blockedMcCommands.split(",");
+        Set<String> set = new java.util.HashSet<>();
+        for (String part : parts) {
+            String s = part == null ? "" : part.trim().toLowerCase(java.util.Locale.ROOT);
+            if (!s.isEmpty()) {
+                set.add(s);
+            }
+        }
+        return set;
     }
 
 

@@ -2,7 +2,9 @@ package cc.endmc.endlessnode.controller;
 
 import cc.endmc.endlessnode.service.AccessTokensService;
 import cc.endmc.endlessnode.service.FileDownloadService;
+import cc.endmc.endlessnode.util.SafePaths;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.UrlResource;
 import org.springframework.http.HttpHeaders;
@@ -31,6 +33,19 @@ public class FileController {
     private final FileDownloadService fileDownloadService;
 
     /**
+     * 文件操作根目录：所有文件操作都将被限制在该目录下。
+     * 可通过环境变量/配置覆盖：ENDLESS_FILES_ROOT 或 endless.files.root
+     */
+    @Value("${endless.files.root:.}")
+    private String filesRoot;
+
+    private Path resolveInRoot(String userPath) throws IOException {
+        Path root = SafePaths.safeJoin(Paths.get(filesRoot), "");
+        Path candidate = SafePaths.safeJoin(root, userPath);
+        return SafePaths.verifyRealPathWithinRoot(root, candidate);
+    }
+
+    /**
      * 获取文件列表
      *
      * @param path 目录路径，如果为空则返回根目录
@@ -41,36 +56,8 @@ public class FileController {
             @RequestParam(required = false, defaultValue = "") String path) {
 
         try {
-            // 检查是否为Windows系统
-            boolean isWindows = System.getProperty("os.name").toLowerCase().contains("windows");
-
-            // 如果是Windows系统且路径为空，返回所有可用驱动器
-            if (isWindows && path.isEmpty()) {
-                List<Map<String, Object>> drives = Arrays.stream(File.listRoots())
-                        .map(drive -> {
-                            Map<String, Object> driveInfo = new HashMap<>();
-                            String volumeLabel = fileSystemView.getSystemDisplayName(drive);
-                            driveInfo.put("name", volumeLabel);
-                            driveInfo.put("path", drive.getPath());
-                            // driveInfo.put("volumeLabel", volumeLabel);
-                            driveInfo.put("isDirectory", true);
-                            driveInfo.put("totalSpace", drive.getTotalSpace());
-                            driveInfo.put("freeSpace", drive.getFreeSpace());
-                            driveInfo.put("usableSpace", drive.getUsableSpace());
-                            driveInfo.put("lastModified", 0L);
-                            return driveInfo;
-                        })
-                        .collect(Collectors.toList());
-
-                Map<String, Object> response = new HashMap<>();
-                response.put("path", "");
-                response.put("files", drives);
-                response.put("success", true);
-                return ResponseEntity.ok(response);
-            }
-
-            // 构建目标路径
-            Path targetPath = path.isEmpty() ? Paths.get("/") : Paths.get(path);
+            // 构建目标路径（限制在 filesRoot 内）
+            Path targetPath = resolveInRoot(path);
 
             // 检查路径是否存在
             if (!Files.exists(targetPath)) {
@@ -108,6 +95,8 @@ public class FileController {
             response.put("success", true);
 
             return ResponseEntity.ok(response);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.status(403).body(Map.of("error", "路径不允许: " + e.getMessage()));
         } catch (IOException e) {
             return ResponseEntity.status(500).body(Map.of("error", "获取文件列表失败:" + e.getMessage()));
         }
@@ -125,7 +114,7 @@ public class FileController {
 
         try {
             // 构建文件路径
-            Path filePath = Paths.get(path);
+            Path filePath = resolveInRoot(path);
 
             // 检查文件是否存在
             if (!Files.exists(filePath)) {
@@ -147,6 +136,10 @@ public class FileController {
                     .body(resource);
         } catch (MalformedURLException e) {
             return ResponseEntity.status(500).build();
+        } catch (IOException e) {
+            return ResponseEntity.status(500).build();
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.status(403).build();
         }
     }
 
@@ -169,7 +162,7 @@ public class FileController {
             }
             String fileName = file.getOriginalFilename();
             // 构建目标路径
-            Path targetPath = Paths.get(path);
+            Path targetPath = resolveInRoot(path);
 
             // 如果目标是目录，则添加文件名
             if (Files.isDirectory(targetPath) || !targetPath.toString().contains(".")) {
@@ -192,6 +185,8 @@ public class FileController {
             response.put("fileName", fileName);
 
             return ResponseEntity.ok(response);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.status(403).body(Map.of("error", "路径不允许: " + e.getMessage()));
         } catch (IOException e) {
             return ResponseEntity.status(500).body(Map.of(
                     "error", "文件上传失败",
@@ -213,7 +208,7 @@ public class FileController {
 
         try {
             // 构建目标路径
-            Path targetPath = Paths.get(path);
+            Path targetPath = resolveInRoot(path);
 
             // 检查路径是否存在
             if (!Files.exists(targetPath)) {
@@ -232,6 +227,8 @@ public class FileController {
             response.put("path", path);
 
             return ResponseEntity.ok(response);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.status(403).body(Map.of("error", "路径不允许: " + e.getMessage()));
         } catch (IOException e) {
             return ResponseEntity.status(500).body(Map.of("error", "文件删除失败: " + e.getMessage()));
         }
@@ -279,7 +276,7 @@ public class FileController {
             }
 
             // 构建目标路径
-            Path targetPath = Paths.get(path);
+            Path targetPath = resolveInRoot(path);
 
             // 验证目标路径是否可写
             Path parentPath = targetPath.getParent();
@@ -307,11 +304,7 @@ public class FileController {
 
             return ResponseEntity.ok(response);
         } catch (IllegalArgumentException e) {
-            return ResponseEntity.badRequest().body(Map.of(
-                    "error", "参数错误: " + e.getMessage(),
-                    "url", url,
-                    "path", path
-            ));
+            return ResponseEntity.status(403).body(Map.of("error", "路径不允许: " + e.getMessage()));
         } catch (Exception e) {
             return ResponseEntity.status(500).body(Map.of(
                     "error", "文件下载失败: " + e.getMessage(),
