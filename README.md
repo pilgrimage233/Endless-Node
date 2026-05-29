@@ -16,8 +16,8 @@ Minecraft 服务器。
 
 ## 技术栈
 
-- Spring Boot 3.4.4
-- MyBatis-Plus 3.5.7
+- Spring Boot 3.5.8
+- MyBatis-Plus 3.5.14
 - SQLite 数据库
 - WebSocket 支持
 

@@ -10,7 +10,7 @@
     </parent>
     <groupId>cc.endmc</groupId>
     <artifactId>Endless-Node</artifactId>
-    <version>1.6</version>
+    <version>1.7</version>
     <name>Endless-Node</name>
     <description>Endless-Node</description>
 
@@ -66,12 +66,15 @@
             <version>3.49.1.0</version>
         </dependency>
 
+        <!-- devtools 仅用于开发环境，生产构建时排除 -->
+        <!--
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-devtools</artifactId>
             <scope>runtime</scope>
             <optional>true</optional>
         </dependency>
+        -->
         <dependency>
             <groupId>org.projectlombok</groupId>
             <artifactId>lombok</artifactId>
@@ -111,10 +114,10 @@
             <version>2.8.6</version>
         </dependency>
 
-        <!--引入Hutool-->
+        <!--引入Hutool（仅需 Ipv4Util，用 hutool-core 替代 hutool-all）-->
         <dependency>
             <groupId>cn.hutool</groupId>
-            <artifactId>hutool-all</artifactId>
+            <artifactId>hutool-core</artifactId>
             <version>5.8.41</version>
         </dependency>
 
