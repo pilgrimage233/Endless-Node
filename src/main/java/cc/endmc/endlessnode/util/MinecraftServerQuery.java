@@ -667,7 +667,7 @@ public class MinecraftServerQuery {
             Map<String, Object> map = new HashMap<>();
             map.put("motd", motd);
             map.put("gameType", gameType);
-            map.put("map", map);
+            map.put("map", this.map);
             map.put("onlinePlayers", onlinePlayers);
             map.put("maxPlayers", maxPlayers);
             map.put("port", port);

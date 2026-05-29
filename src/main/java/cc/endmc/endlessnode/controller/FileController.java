@@ -13,7 +13,6 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
-import javax.swing.filechooser.FileSystemView;
 import java.io.File;
 import java.io.IOException;
 import java.net.MalformedURLException;
@@ -29,7 +28,6 @@ import java.util.stream.Collectors;
 public class FileController {
 
     private final AccessTokensService accessTokensService;
-    private final FileSystemView fileSystemView = FileSystemView.getFileSystemView();
     private final FileDownloadService fileDownloadService;
 
     /**
@@ -259,16 +257,8 @@ public class FileController {
             @RequestParam String url,
             @RequestParam String path) {
         try {
-            // 验证URL格式
-            if (url == null || url.trim().isEmpty()) {
-                return ResponseEntity.badRequest().body(Map.of("error", "URL不能为空"));
-            }
-
-            // 验证URL协议
-            String lowerUrl = url.toLowerCase().trim();
-            if (!lowerUrl.startsWith("http://") && !lowerUrl.startsWith("https://")) {
-                return ResponseEntity.badRequest().body(Map.of("error", "仅支持HTTP和HTTPS协议"));
-            }
+            // SSRF 防护：校验 URL 目标地址安全性
+            fileDownloadService.validateUrlSafety(url);
 
             // 验证路径
             if (path == null || path.trim().isEmpty()) {
