@@ -30,4 +30,6 @@ public class OperationType {
 
     public static final String PLAYER_ACTION = "PLAYER_ACTION";
 
+    public static final String RESTORE_BACKUP = "RESTORE_BACKUP";
+
 }

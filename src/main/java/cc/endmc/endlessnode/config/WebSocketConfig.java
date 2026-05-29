@@ -7,9 +7,16 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpStatus;
+import org.springframework.messaging.Message;
+import org.springframework.messaging.MessageChannel;
+import org.springframework.messaging.simp.config.ChannelRegistration;
+import org.springframework.messaging.simp.config.MessageBrokerRegistry;
+import org.springframework.messaging.simp.stomp.StompCommand;
+import org.springframework.messaging.simp.stomp.StompHeaderAccessor;
+import org.springframework.messaging.support.ChannelInterceptor;
+import org.springframework.messaging.support.MessageHeaderAccessor;
 import org.springframework.http.server.ServerHttpRequest;
 import org.springframework.http.server.ServerHttpResponse;
-import org.springframework.messaging.simp.config.MessageBrokerRegistry;
 import org.springframework.web.socket.WebSocketHandler;
 import org.springframework.web.socket.config.annotation.EnableWebSocketMessageBroker;
 import org.springframework.web.socket.config.annotation.StompEndpointRegistry;
@@ -20,8 +27,7 @@ import java.util.Date;
 import java.util.Map;
 
 /**
- * WebSocket配置类
- * 启用WebSocket支持，配置消息代理和端点
+ * WebSocket 配置：消息代理 + 握手拦截 + STOMP CONNECT 认证。
  */
 @Configuration
 @EnableWebSocketMessageBroker
@@ -33,26 +39,29 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
 
     @Override
     public void configureMessageBroker(MessageBrokerRegistry registry) {
-        // 设置消息代理的前缀，客户端订阅消息的前缀
         registry.enableSimpleBroker("/topic", "/queue");
-        // 设置客户端发送消息的前缀
         registry.setApplicationDestinationPrefixes("/app");
-        // 设置用户目标前缀，用于convertAndSendToUser
         registry.setUserDestinationPrefix("/user");
     }
 
     @Override
     public void registerStompEndpoints(StompEndpointRegistry registry) {
-        // 注册STOMP端点，客户端通过这个端点连接WebSocket
         registry.addEndpoint("/ws")
-                .setAllowedOriginPatterns("*") // 使用allowedOriginPatterns代替allowedOrigins，支持credentials
+                .setAllowedOriginPatterns("*")
                 .addInterceptors(new WebSocketHandshakeInterceptor(accessTokensService))
-                .withSockJS(); // 启用SockJS支持，提供更好的浏览器兼容性
+                .withSockJS();
     }
 
     /**
-     * WebSocket握手拦截器
-     * 在WebSocket握手阶段验证token
+     * 注册 STOMP 入站通道拦截器，在 CONNECT 时强制校验 token。
+     */
+    @Override
+    public void configureClientInboundChannel(ChannelRegistration registration) {
+        registration.interceptors(new StompAuthChannelInterceptor(accessTokensService));
+    }
+
+    /**
+     * WebSocket 握手拦截器：验证 header/query 中的 token。
      */
     private record WebSocketHandshakeInterceptor(
             AccessTokensService accessTokensService) implements HandshakeInterceptor {
@@ -60,18 +69,11 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
         @Override
         public boolean beforeHandshake(ServerHttpRequest request, ServerHttpResponse response,
                                        WebSocketHandler wsHandler, Map<String, Object> attributes) {
-
-            log.debug("WebSocket握手开始: {}", request.getURI());
-
-            // 获取token头（主要用于原生WebSocket）
             String token = request.getHeaders().getFirst(Node.Header.X_ENDLESS_TOKEN);
-
-            // 对于SockJS，token可能通过查询参数传递
             if (token == null || token.isEmpty()) {
                 String query = request.getURI().getQuery();
                 if (query != null) {
-                    String[] params = query.split("&");
-                    for (String param : params) {
+                    for (String param : query.split("&")) {
                         if (param.startsWith("token=")) {
                             token = param.substring(6);
                             break;
@@ -80,50 +82,62 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
                 }
             }
 
-            // 对于SockJS握手阶段，如果没有token，我们允许握手通过
-            // 真正的认证将在STOMP CONNECT消息中进行
             if (token != null && !token.isEmpty()) {
-                // 验证token
-                AccessTokens accessToken = accessTokensService.lambdaQuery()
-                        .eq(AccessTokens::getToken, token)
-                        .one();
-
-                if (accessToken == null) {
-                    log.warn("WebSocket握手失败: 无效token");
+                AccessTokens at = accessTokensService.lambdaQuery()
+                        .eq(AccessTokens::getToken, token).one();
+                if (at == null || isExpired(at)) {
                     response.setStatusCode(HttpStatus.UNAUTHORIZED);
                     return false;
                 }
-
-                // 检查token是否过期
-                if (accessToken.getExpiresAt().getTime() != Long.MAX_VALUE &&
-                        accessToken.getExpiresAt().before(new Date())) {
-                    log.warn("WebSocket握手失败: token已过期");
-                    response.setStatusCode(HttpStatus.UNAUTHORIZED);
-                    return false;
-                }
-
-                // 将token信息保存到WebSocket会话属性中
                 attributes.put("token", token);
-                attributes.put("masterId", accessToken.getMasterId());
-                attributes.put("masterUuid", accessToken.getMasterUuid());
-                attributes.put("obj", accessToken);
-
-                log.debug("WebSocket握手成功: masterId={}", accessToken.getMasterId());
-            } else {
-                log.debug("WebSocket握手通过（无token验证，将在STOMP层验证）");
+                attributes.put("masterId", at.getMasterId());
+                attributes.put("masterUuid", at.getMasterUuid());
             }
-
+            // 允许握手通过，STOMP CONNECT 阶段会再次校验
             return true;
         }
 
         @Override
         public void afterHandshake(ServerHttpRequest request, ServerHttpResponse response,
                                    WebSocketHandler wsHandler, Exception exception) {
-            if (exception != null) {
-                log.error("WebSocket握手异常", exception);
-            } else {
-                log.debug("WebSocket握手完成");
-            }
         }
     }
-} 
+
+    /**
+     * STOMP 入站拦截器：在 CONNECT 帧时强制校验 token，拒绝未认证连接。
+     */
+    private record StompAuthChannelInterceptor(AccessTokensService accessTokensService)
+            implements ChannelInterceptor {
+
+        @Override
+        public Message<?> preSend(Message<?> message, MessageChannel channel) {
+            StompHeaderAccessor accessor = MessageHeaderAccessor.getAccessor(message, StompHeaderAccessor.class);
+            if (accessor == null) return message;
+
+            if (StompCommand.CONNECT.equals(accessor.getCommand())) {
+                String token = accessor.getFirstNativeHeader(Node.Header.X_ENDLESS_TOKEN);
+                if (token == null || token.isEmpty()) {
+                    log.warn("STOMP CONNECT 被拒绝: 缺少 token");
+                    return null; // 丢弃消息，拒绝连接
+                }
+                AccessTokens at = accessTokensService.lambdaQuery()
+                        .eq(AccessTokens::getToken, token).one();
+                if (at == null || isExpired(at)) {
+                    log.warn("STOMP CONNECT 被拒绝: 无效或过期 token");
+                    return null;
+                }
+                // 将认证信息存入 StompHeaderAccessor 的 session attributes
+                accessor.getSessionAttributes().put("token", token);
+                accessor.getSessionAttributes().put("masterId", at.getMasterId());
+                accessor.getSessionAttributes().put("masterUuid", at.getMasterUuid());
+                accessor.setUser(() -> at.getMasterUuid());
+                log.debug("STOMP CONNECT 认证成功: masterUuid={}", at.getMasterUuid());
+            }
+            return message;
+        }
+    }
+
+    private static boolean isExpired(AccessTokens at) {
+        return at.getExpiresAt().getTime() != Long.MAX_VALUE && at.getExpiresAt().before(new Date());
+    }
+}

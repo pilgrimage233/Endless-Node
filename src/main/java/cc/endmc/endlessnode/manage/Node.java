@@ -2,39 +2,18 @@ package cc.endmc.endlessnode.manage;
 
 import java.io.OutputStreamWriter;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
 /**
- * ClassName: Node <br>
- * Description: 存储节点运行时信息的类 <br>
- * date: 2025/10/28 22:11 <br>
- *
- * @author Memory <br>
- * @since JDK 17+
+ * 存储节点运行时信息的类。
+ * 仅保留实际使用的运行时状态映射。
  */
-
 public class Node {
 
-    // 存储正在运行的服务器进程
     private static final Map<Integer, Process> RUNNING_SERVERS = new ConcurrentHashMap<>();
-
-    // 存储服务器控制台输出流
     private static final Map<Integer, OutputStreamWriter> SERVER_WRITERS = new ConcurrentHashMap<>();
-
-    // 存储服务器控制台输出线程
     private static final Map<Integer, Thread> CONSOLE_THREADS = new ConcurrentHashMap<>();
-
-    // 存储服务器启动时间（用于计算运行时长）
     private static final Map<Integer, Long> SERVER_START_TIMES = new ConcurrentHashMap<>();
-
-    // 存储活跃的WebSocket会话
-    private static final Map<String, Set<String>> ACTIVE_SESSIONS = new ConcurrentHashMap<>();
-
-    // 线程池，用于管理控制台输出线程
-    private static final ExecutorService EXECUTOR_SERVICE = Executors.newCachedThreadPool();
 
     public static Map<Integer, Process> getRunningServers() {
         return RUNNING_SERVERS;
@@ -50,14 +29,6 @@ public class Node {
 
     public static Map<Integer, Long> getServerStartTimes() {
         return SERVER_START_TIMES;
-    }
-
-    public static Map<String, Set<String>> getActiveSessions() {
-        return ACTIVE_SESSIONS;
-    }
-
-    public static ExecutorService getExecutorService() {
-        return EXECUTOR_SERVICE;
     }
 
     public static class Header {

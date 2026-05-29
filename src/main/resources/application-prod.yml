@@ -1,0 +1,6 @@
+# 生产环境日志配置
+logging:
+  level:
+    cc.endmc: info
+    org.springframework: warn
+    org.mybatis: warn

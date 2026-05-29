@@ -50,9 +50,11 @@ public class InitializationConfig {
 
                 accessTokensService.save(permanentToken);
 
-                log.info("秘钥创建成功: {}", permanentToken.getToken());
+                String maskedToken = permanentToken.getToken().substring(0, 4) + "***";
+                log.info("秘钥创建成功: {}", maskedToken);
             } else {
-                log.info("秘钥存在: {}", list.get(0).getToken());
+                String maskedToken = list.get(0).getToken().substring(0, 4) + "***";
+                log.info("秘钥存在: {}", maskedToken);
             }
             // token缓存
             accessTokensService.list().forEach(accessToken -> {
@@ -76,22 +78,32 @@ public class InitializationConfig {
 
             if (adminUser == null) {
                 log.info("创建默认管理员用户...");
+                String[] passwordData = PasswordUtil.generateRandomAdminPassword();
                 adminUser = new Users();
                 adminUser.setUsername("admin");
-                adminUser.setPassword(PasswordUtil.getDefaultAdminPassword());
+                adminUser.setPassword(passwordData[1]);
                 adminUser.setRole("ADMIN");
                 adminUser.setEnabled(1);
                 adminUser.setFirstLogin(1); // 标记为首次登录
                 adminUser.setCreatedAt(new Date());
                 usersService.save(adminUser);
-                log.info("默认管理员用户创建成功");
+                log.warn("============================================================");
+                log.warn("默认管理员用户已创建");
+                log.warn("用户名: admin");
+                log.warn("初始密码: {} (请登录后立即修改)", passwordData[0]);
+                log.warn("============================================================");
             } else {
                 // 检查密码是否需要更新（如果密码不是BCrypt格式）
                 if (!adminUser.getPassword().startsWith("$2a$")) {
                     log.info("更新管理员用户密码为BCrypt格式...");
-                    adminUser.setPassword(PasswordUtil.getDefaultAdminPassword());
+                    String[] passwordData = PasswordUtil.generateRandomAdminPassword();
+                    adminUser.setPassword(passwordData[1]);
                     usersService.updateById(adminUser);
-                    log.info("管理员用户密码更新成功");
+                    log.warn("============================================================");
+                    log.warn("管理员密码已重置为随机密码");
+                    log.warn("用户名: admin");
+                    log.warn("新密码: {} (请登录后立即修改)", passwordData[0]);
+                    log.warn("============================================================");
                 }
             }
         } catch (Exception e) {
