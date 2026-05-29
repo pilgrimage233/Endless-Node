@@ -13,6 +13,8 @@ import org.springframework.web.bind.annotation.*;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 
 @RestController
 @RequestMapping("/api/auth")
@@ -21,6 +23,36 @@ public class LoginController {
 
     private final UsersService usersService;
 
+    private static final int MAX_LOGIN_ATTEMPTS = 5;
+    private static final long LOCKOUT_DURATION_MS = 15 * 60 * 1000L; // 15分钟
+    private final ConcurrentHashMap<String, LoginAttempt> loginAttempts = new ConcurrentHashMap<>();
+
+    private record LoginAttempt(int count, long firstAttemptAt) {}
+
+    private boolean isLockedOut(String ip) {
+        LoginAttempt attempt = loginAttempts.get(ip);
+        if (attempt == null) return false;
+        if (System.currentTimeMillis() - attempt.firstAttemptAt() > LOCKOUT_DURATION_MS) {
+            loginAttempts.remove(ip);
+            return false;
+        }
+        return attempt.count() >= MAX_LOGIN_ATTEMPTS;
+    }
+
+    private void recordFailedAttempt(String ip) {
+        loginAttempts.merge(ip, new LoginAttempt(1, System.currentTimeMillis()),
+                (old, fresh) -> {
+                    if (System.currentTimeMillis() - old.firstAttemptAt() > LOCKOUT_DURATION_MS) {
+                        return new LoginAttempt(1, System.currentTimeMillis());
+                    }
+                    return new LoginAttempt(old.count() + 1, old.firstAttemptAt());
+                });
+    }
+
+    private void clearAttempts(String ip) {
+        loginAttempts.remove(ip);
+    }
+
     /**
      * 用户登录
      */
@@ -28,6 +60,13 @@ public class LoginController {
     public ResponseEntity<Map<String, Object>> login(@RequestBody Map<String, String> request, 
                                                     HttpServletRequest httpRequest, 
                                                     HttpServletResponse httpResponse) {
+        String ip = httpRequest.getRemoteAddr();
+
+        // 速率限制检查
+        if (isLockedOut(ip)) {
+            return ResponseEntity.status(429).body(Map.of("error", "登录尝试过多，请15分钟后重试"));
+        }
+
         String username = request.get("username");
         String password = request.get("password");
 
@@ -42,13 +81,18 @@ public class LoginController {
                 .one();
 
         if (user == null) {
+            recordFailedAttempt(ip);
             return ResponseEntity.status(401).body(Map.of("error", "用户名或密码错误"));
         }
 
         // 使用BCrypt验证密码
         if (!PasswordUtil.matches(password, user.getPassword())) {
+            recordFailedAttempt(ip);
             return ResponseEntity.status(401).body(Map.of("error", "用户名或密码错误"));
         }
+
+        // 登录成功，清除失败记录
+        clearAttempts(ip);
 
         // 更新最后登录时间
         user.setLastLogin(new Date());

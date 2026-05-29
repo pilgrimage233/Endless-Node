@@ -128,6 +128,10 @@ public class AuthController {
                 .eq(AccessTokens::getToken, secretKey)
                 .one();
 
+        if (token == null) {
+            return ResponseEntity.status(500).body(Map.of("error", "节点注册失败：未找到对应的访问令牌"));
+        }
+
         token.setMasterUuid(masterNodes.getUuid());
         token.setMasterId(masterNodes.getId());
         final boolean tokenSave = accessTokensService.saveOrUpdate(token);

@@ -65,6 +65,9 @@ public class SecurityConfig {
                                 "/",
                                 "/index.html",
                                 "/login.html",
+                                "/tokens.html",
+                                "/change-password.html",
+                                "/websocket-test.html",
                                 "/actuator/health",
                                 "/actuator/info",
                                 "/swagger-ui/**",
@@ -76,14 +79,17 @@ public class SecurityConfig {
                                 "/ws/**"
                         ).permitAll()
                         .requestMatchers("/api/auth/**").permitAll()
+                        .requestMatchers("/api/tokens/**").permitAll()
+                        .requestMatchers("/system/info").permitAll()
                         .requestMatchers(
                                 "/api/servers/**",
                                 "/api/files/**",
                                 "/api/system/**",
-                                "/api/java-env/**"
+                                "/api/java-env/**",
+                                "/api/manage/**"
                         ).authenticated()
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
-                        .anyRequest().permitAll()
+                        .anyRequest().denyAll()
                 )
                 .addFilterBefore(new EndlessTokenAuthenticationFilter(accessTokensService), UsernamePasswordAuthenticationFilter.class);
 
@@ -138,12 +144,15 @@ public class SecurityConfig {
                     || uri.startsWith("/api/system/")
                     || uri.equals("/api/system")
                     || uri.startsWith("/api/java-env/")
-                    || uri.equals("/api/java-env");
+                    || uri.equals("/api/java-env")
+                    || uri.startsWith("/api/manage/");
         }
 
         private AccessTokens getAccessToken(String token) {
-            if (TokenCache.containsKey(token)) {
-                return TokenCache.get(token);
+            // get() 内部已做过期检查，过期时返回 null
+            AccessTokens cached = TokenCache.get(token);
+            if (cached != null) {
+                return cached;
             }
             AccessTokens accessToken = accessTokensService.lambdaQuery()
                     .eq(AccessTokens::getToken, token)

@@ -4,6 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Endless Node - 用户登录</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
     <style>
         * {
             margin: 0;
@@ -11,305 +15,569 @@
             box-sizing: border-box;
         }
 
+        :root {
+            --bg: #f5f5f7;
+            --card-bg: #ffffff;
+            --card-border: rgba(0, 0, 0, 0.06);
+            --card-shadow: rgba(0, 0, 0, 0.08);
+            --text-primary: #1d1d1f;
+            --text-secondary: #86868b;
+            --text-muted: #aeaeb2;
+            --accent: #0071e3;
+            --accent-hover: #0077ed;
+            --input-bg: #f5f5f7;
+            --input-border: rgba(0, 0, 0, 0.08);
+            --input-focus: #0071e3;
+            --success-bg: rgba(52, 199, 89, 0.12);
+            --success-text: #34c759;
+            --success-border: rgba(52, 199, 89, 0.25);
+            --error-bg: rgba(255, 59, 48, 0.12);
+            --error-text: #ff3b30;
+            --error-border: rgba(255, 59, 48, 0.25);
+            --divider: rgba(0, 0, 0, 0.06);
+        }
+
+        :root.dark {
+            --bg: #1d1d1f;
+            --card-bg: #2c2c2e;
+            --card-border: rgba(255, 255, 255, 0.08);
+            --card-shadow: rgba(0, 0, 0, 0.3);
+            --text-primary: #f5f5f7;
+            --text-secondary: #98989d;
+            --text-muted: #636366;
+            --accent: #0a84ff;
+            --accent-hover: #409cff;
+            --input-bg: #3a3a3c;
+            --input-border: rgba(255, 255, 255, 0.08);
+            --input-focus: #0a84ff;
+            --success-bg: rgba(48, 209, 88, 0.15);
+            --success-text: #30d158;
+            --success-border: rgba(48, 209, 88, 0.3);
+            --error-bg: rgba(255, 69, 58, 0.15);
+            --error-text: #ff453a;
+            --error-border: rgba(255, 69, 58, 0.3);
+            --divider: rgba(255, 255, 255, 0.08);
+        }
+
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', 'Helvetica Neue', Arial, sans-serif;
+            background: var(--bg);
             min-height: 100vh;
             display: flex;
             align-items: center;
             justify-content: center;
-            color: #333;
+            color: var(--text-primary);
+            transition: background 0.3s ease, color 0.3s ease;
+            padding: 20px;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+            text-rendering: optimizeLegibility;
         }
 
-        .login-container {
-            background: white;
-            border-radius: 16px;
-            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
-            padding: 40px;
+        .login-card {
             width: 100%;
-            max-width: 400px;
-            margin: 20px;
+            max-width: 420px;
+            background: var(--card-bg);
+            border-radius: 20px;
+            padding: 48px 36px;
+            box-shadow: 0 4px 24px var(--card-shadow);
+            border: 1px solid var(--card-border);
+            animation: cardIn 0.6s cubic-bezier(0.16, 1, 0.3, 1);
         }
 
-        .login-header {
+        @keyframes cardIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .header {
+            display: flex;
+            justify-content: flex-end;
+            margin-bottom: 32px;
+        }
+
+        .theme-toggle {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            border: none;
+            background: var(--input-bg);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s ease;
+        }
+
+        .theme-toggle:hover {
+            background: var(--input-border);
+        }
+
+        .theme-toggle i {
+            font-size: 16px;
+            color: var(--text-secondary);
+            transition: transform 0.4s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+        }
+
+        .theme-toggle.rotating i {
+            transform: rotate(360deg);
+        }
+
+        .logo-section {
             text-align: center;
-            margin-bottom: 30px;
+            margin-bottom: 36px;
         }
 
-        .login-header h1 {
-            color: #2d3748;
-            font-size: 2rem;
-            margin-bottom: 8px;
+        .logo {
+            width: 64px;
+            height: 64px;
+            margin: 0 auto 16px;
+            background: var(--accent);
+            border-radius: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
         }
 
-        .login-header p {
-            color: #718096;
-            font-size: 1rem;
+        .logo i {
+            font-size: 28px;
+            color: white;
+        }
+
+        .logo-section h1 {
+            font-size: 24px;
+            font-weight: 700;
+            margin-bottom: 6px;
+            color: var(--text-primary);
+        }
+
+        .logo-section p {
+            font-size: 14px;
+            color: var(--text-secondary);
+        }
+
+        .alert {
+            padding: 12px 16px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            display: none;
+            font-size: 13px;
+            font-weight: 500;
+        }
+
+        .alert-success {
+            background: var(--success-bg);
+            color: var(--success-text);
+            border: 1px solid var(--success-border);
+        }
+
+        .alert-error {
+            background: var(--error-bg);
+            color: var(--error-text);
+            border: 1px solid var(--error-border);
+        }
+
+        .demo-info {
+            background: rgba(0, 113, 227, 0.06);
+            border: 1px solid rgba(0, 113, 227, 0.12);
+            border-radius: 10px;
+            padding: 14px 16px;
+            margin-bottom: 24px;
+        }
+
+        :root.dark .demo-info {
+            background: rgba(10, 132, 255, 0.08);
+            border-color: rgba(10, 132, 255, 0.2);
+        }
+
+        .demo-info-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 10px;
+        }
+
+        .demo-info-header i {
+            color: var(--accent);
+            font-size: 13px;
+        }
+
+        .demo-info-header span {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--accent);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .demo-info-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 4px 0;
+        }
+
+        .demo-info-label {
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+
+        .demo-info-value {
+            font-family: 'JetBrains Mono', 'SF Mono', 'Fira Code', monospace;
+            font-size: 13px;
+            color: var(--text-primary);
+            background: var(--input-bg);
+            padding: 3px 10px;
+            border-radius: 6px;
         }
 
         .form-group {
-            margin-bottom: 20px;
+            margin-bottom: 18px;
         }
 
         .form-group label {
             display: block;
             margin-bottom: 8px;
             font-weight: 600;
-            color: #4a5568;
+            font-size: 13px;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .input-wrapper {
+            position: relative;
+            display: flex;
+            align-items: center;
+        }
+
+        .input-icon {
+            position: absolute;
+            left: 14px;
+            color: var(--text-muted);
+            font-size: 15px;
+            transition: color 0.2s ease;
+            pointer-events: none;
+            z-index: 1;
         }
 
         .form-group input {
             width: 100%;
-            padding: 12px 16px;
-            border: 2px solid #e2e8f0;
-            border-radius: 8px;
-            font-size: 16px;
-            transition: border-color 0.3s ease;
+            padding: 13px 16px 13px 42px;
+            background: var(--input-bg);
+            border: 1.5px solid var(--input-border);
+            border-radius: 12px;
+            font-size: 15px;
+            color: var(--text-primary);
+            transition: all 0.2s ease;
+            font-family: inherit;
+        }
+
+        .form-group input::placeholder {
+            color: var(--text-muted);
         }
 
         .form-group input:focus {
             outline: none;
-            border-color: #667eea;
-            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+            border-color: var(--input-focus);
+            box-shadow: 0 0 0 3px rgba(0, 113, 227, 0.15);
         }
 
-        .btn {
+        :root.dark .form-group input:focus {
+            box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.2);
+        }
+
+        .input-wrapper:focus-within .input-icon {
+            color: var(--accent);
+        }
+
+        .password-toggle {
+            position: absolute;
+            right: 12px;
+            background: none;
+            border: none;
+            color: var(--text-muted);
+            cursor: pointer;
+            padding: 4px;
+            font-size: 15px;
+            transition: color 0.2s ease;
+            z-index: 1;
+        }
+
+        .password-toggle:hover {
+            color: var(--text-secondary);
+        }
+
+        .btn-login {
             width: 100%;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 14px 24px;
+            background: var(--accent);
             color: white;
             border: none;
-            padding: 12px 24px;
-            border-radius: 8px;
-            font-size: 16px;
+            border-radius: 12px;
+            font-size: 15px;
             font-weight: 600;
             cursor: pointer;
-            transition: transform 0.2s ease, box-shadow 0.2s ease;
-            margin-bottom: 15px;
+            transition: all 0.2s ease;
+            font-family: inherit;
+            margin-top: 6px;
         }
 
-        .btn:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        .btn-login:hover {
+            background: var(--accent-hover);
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(0, 113, 227, 0.3);
         }
 
-        .btn:disabled {
-            opacity: 0.6;
+        :root.dark .btn-login:hover {
+            box-shadow: 0 4px 12px rgba(10, 132, 255, 0.3);
+        }
+
+        .btn-login:active {
+            transform: translateY(0);
+        }
+
+        .btn-login:disabled {
+            opacity: 0.5;
             cursor: not-allowed;
             transform: none;
+            box-shadow: none;
         }
 
-        .alert {
-            padding: 12px 16px;
-            border-radius: 8px;
-            margin-bottom: 20px;
-            display: none;
+        .btn-login .btn-content {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
         }
 
-        .alert-success {
-            background: #c6f6d5;
-            color: #22543d;
-            border: 1px solid #9ae6b4;
-        }
-
-        .alert-error {
-            background: #fed7d7;
-            color: #742a2a;
-            border: 1px solid #feb2b2;
-        }
-
-        .loading {
-            display: none;
-            text-align: center;
-            padding: 20px;
-        }
-
-        .spinner {
-            border: 3px solid #f3f3f3;
-            border-top: 3px solid #667eea;
+        .btn-login .spinner {
+            width: 18px;
+            height: 18px;
+            border: 2.5px solid rgba(255, 255, 255, 0.3);
+            border-top-color: white;
             border-radius: 50%;
-            width: 30px;
-            height: 30px;
-            animation: spin 1s linear infinite;
-            margin: 0 auto 10px;
+            animation: spin 0.8s linear infinite;
+            display: none;
         }
+
+        .btn-login.loading .spinner { display: block; }
+        .btn-login.loading .btn-text { display: none; }
 
         @keyframes spin {
-            0% {
-                transform: rotate(0deg);
-            }
-            100% {
-                transform: rotate(360deg);
-            }
+            to { transform: rotate(360deg); }
         }
 
-        .back-link {
+        .login-footer {
+            margin-top: 28px;
             text-align: center;
-            margin-top: 20px;
         }
 
-        .back-link a {
-            color: #667eea;
-            text-decoration: none;
-            font-weight: 500;
-        }
-
-        .back-link a:hover {
-            text-decoration: underline;
-        }
-
-        .demo-info {
-            background: #f7fafc;
-            border: 1px solid #e2e8f0;
-            border-radius: 8px;
-            padding: 15px;
+        .footer-divider {
+            height: 1px;
+            background: var(--divider);
             margin-bottom: 20px;
+        }
+
+        .footer-links {
+            display: flex;
+            justify-content: center;
+            gap: 24px;
+        }
+
+        .footer-link {
+            color: var(--text-secondary);
+            text-decoration: none;
             font-size: 14px;
+            font-weight: 500;
+            transition: color 0.2s ease;
+            display: flex;
+            align-items: center;
+            gap: 6px;
         }
 
-        .demo-info h4 {
-            color: #2d3748;
-            margin-bottom: 8px;
+        .footer-link:hover {
+            color: var(--accent);
         }
 
-        .demo-info p {
-            color: #4a5568;
-            margin-bottom: 4px;
+        .footer-link i {
+            font-size: 12px;
         }
 
         @media (max-width: 480px) {
-            .login-container {
-                margin: 10px;
-                padding: 30px 20px;
+            .login-card {
+                padding: 36px 24px;
+            }
+            .footer-links {
+                flex-direction: column;
+                gap: 12px;
             }
         }
     </style>
 </head>
 <body>
-<div class="login-container">
-    <div class="login-header">
-        <h1>🚀 Endless Node</h1>
-        <p>用户登录</p>
-    </div>
-
-    <div class="alert alert-success" id="successAlert"></div>
-    <div class="alert alert-error" id="errorAlert"></div>
-
-    <div class="demo-info">
-        <h4>默认管理员账户</h4>
-        <p>用户名: admin</p>
-        <p>密码: admin123</p>
-    </div>
-
-    <form id="loginForm">
-        <div class="form-group">
-            <label for="username">用户名:</label>
-            <input autocomplete="username" id="username" name="username" required type="text">
+    <div class="login-card">
+        <div class="header">
+            <button class="theme-toggle" id="themeToggle" aria-label="切换主题">
+                <i class="fas fa-moon"></i>
+            </button>
         </div>
-        <div class="form-group">
-            <label for="password">密码:</label>
-            <input autocomplete="current-password" id="password" name="password" required type="password">
+
+        <div class="logo-section">
+            <div class="logo">
+                <i class="fas fa-server"></i>
+            </div>
+            <h1>Endless Node</h1>
+            <p>节点管理系统</p>
         </div>
-        <button class="btn" id="loginBtn" type="submit">登录</button>
-    </form>
 
-    <div class="loading" id="loading">
-        <div class="spinner"></div>
-        <p>登录中...</p>
-    </div>
+        <div class="alert alert-success" id="successAlert"></div>
+        <div class="alert alert-error" id="errorAlert"></div>
 
-    <div class="back-link">
-        <a href="/tokens.html">密钥管理</a>
+        <div class="demo-info" id="demoInfo">
+            <div class="demo-info-header">
+                <i class="fas fa-info-circle"></i>
+                <span>默认管理员账户</span>
+            </div>
+            <div class="demo-info-row">
+                <span class="demo-info-label">用户名</span>
+                <span class="demo-info-value">admin</span>
+            </div>
+            <div class="demo-info-row">
+                <span class="demo-info-label">密码</span>
+                <span class="demo-info-value">admin123</span>
+            </div>
+        </div>
+
+        <form id="loginForm">
+            <div class="form-group">
+                <label for="username">用户名</label>
+                <div class="input-wrapper">
+                    <i class="fas fa-user input-icon"></i>
+                    <input autocomplete="username" id="username" name="username" required type="text" placeholder="请输入用户名">
+                </div>
+            </div>
+            <div class="form-group">
+                <label for="password">密码</label>
+                <div class="input-wrapper">
+                    <i class="fas fa-lock input-icon"></i>
+                    <input autocomplete="current-password" id="password" name="password" required type="password" placeholder="请输入密码">
+                    <button type="button" class="password-toggle" id="passwordToggle" aria-label="显示密码">
+                        <i class="fas fa-eye"></i>
+                    </button>
+                </div>
+            </div>
+            <button class="btn-login" id="loginBtn" type="submit">
+                <div class="btn-content">
+                    <div class="spinner"></div>
+                    <span class="btn-text">登录</span>
+                </div>
+            </button>
+        </form>
+
+        <div class="login-footer">
+            <div class="footer-divider"></div>
+            <div class="footer-links">
+                <a href="/tokens.html" class="footer-link">
+                    <i class="fas fa-key"></i> 密钥管理
+                </a>
+                <a href="/index.html" class="footer-link">
+                    <i class="fas fa-home"></i> 返回首页
+                </a>
+            </div>
+        </div>
     </div>
-    <div class="back-link">
-        <a href="/index.html">返回首页</a>
-    </div>
-</div>
 
 <script>
-    // 显示消息
-    function showAlert(message, type = 'success') {
-        const alertId = type === 'success' ? 'successAlert' : 'errorAlert';
-        const alert = document.getElementById(alertId);
-        alert.textContent = message;
-        alert.style.display = 'block';
+    const root = document.documentElement;
+    const themeToggle = document.getElementById('themeToggle');
+    const themeIcon = themeToggle.querySelector('i');
+    const savedTheme = localStorage.getItem('theme');
+    if (savedTheme === 'dark') {
+        root.classList.add('dark');
+        themeIcon.classList.remove('fa-moon');
+        themeIcon.classList.add('fa-sun');
+    }
+    themeToggle.addEventListener('click', () => {
+        themeToggle.classList.add('rotating');
         setTimeout(() => {
-            alert.style.display = 'none';
-        }, 3000);
+            root.classList.toggle('dark');
+            if (root.classList.contains('dark')) {
+                themeIcon.classList.remove('fa-moon');
+                themeIcon.classList.add('fa-sun');
+                localStorage.setItem('theme', 'dark');
+            } else {
+                themeIcon.classList.remove('fa-sun');
+                themeIcon.classList.add('fa-moon');
+                localStorage.setItem('theme', 'light');
+            }
+        }, 200);
+        setTimeout(() => themeToggle.classList.remove('rotating'), 500);
+    });
+
+    document.getElementById('passwordToggle').addEventListener('click', function() {
+        const input = document.getElementById('password');
+        const icon = this.querySelector('i');
+        input.type = input.type === 'password' ? 'text' : 'password';
+        icon.classList.toggle('fa-eye');
+        icon.classList.toggle('fa-eye-slash');
+    });
+
+    function showAlert(message, type) {
+        type = type || 'success';
+        const el = document.getElementById(type === 'success' ? 'successAlert' : 'errorAlert');
+        el.textContent = message;
+        el.style.display = 'block';
+        setTimeout(function() { el.style.display = 'none'; }, 4000);
     }
 
-    // 检查是否已登录
     async function checkLoginStatus() {
         try {
-            const response = await fetch('/api/auth/check');
-            const result = await response.json();
-
-            if (result.loggedIn) {
-                // 已登录，跳转到首页
-                window.location.href = '/tokens.html';
-            }
-        } catch (error) {
-            console.log('检查登录状态失败:', error);
-        }
+            const r = await fetch('/api/auth/check');
+            const result = await r.json();
+            if (result.loggedIn) window.location.href = '/tokens.html';
+        } catch (e) {}
     }
 
-    // 登录处理
     async function handleLogin(formData) {
-        const loading = document.getElementById('loading');
-        const loginBtn = document.getElementById('loginBtn');
-
-        loading.style.display = 'block';
-        loginBtn.disabled = true;
-
+        const btn = document.getElementById('loginBtn');
+        btn.classList.add('loading');
+        btn.disabled = true;
         try {
-            const response = await fetch('/api/auth/login', {
+            const r = await fetch('/api/auth/login', {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
+                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(formData)
             });
-
-            const result = await response.json();
-
-            if (response.ok && result.success) {
+            const result = await r.json();
+            if (r.ok && result.success) {
                 if (result.requirePasswordChange) {
                     showAlert('首次登录，请设置新密码');
-                    setTimeout(() => {
-                        window.location.href = '/change-password.html';
-                    }, 1000);
+                    setTimeout(function() { window.location.href = '/change-password.html'; }, 1000);
                 } else {
                     showAlert('登录成功，正在跳转...');
-                    setTimeout(() => {
-                        window.location.href = '/tokens.html';
-                    }, 1000);
+                    setTimeout(function() { window.location.href = '/tokens.html'; }, 1000);
                 }
             } else {
                 showAlert(result.error || '登录失败', 'error');
             }
-        } catch (error) {
-            showAlert('登录失败: ' + error.message, 'error');
+        } catch (e) {
+            showAlert('登录失败: ' + e.message, 'error');
         } finally {
-            loading.style.display = 'none';
-            loginBtn.disabled = false;
+            btn.classList.remove('loading');
+            btn.disabled = false;
         }
     }
 
-    // 表单提交处理
-    document.getElementById('loginForm').addEventListener('submit', function (e) {
+    document.getElementById('loginForm').addEventListener('submit', function(e) {
         e.preventDefault();
-
-        const formData = {
+        handleLogin({
             username: document.getElementById('username').value,
             password: document.getElementById('password').value
-        };
-
-        handleLogin(formData);
+        });
     });
 
-    // 页面加载时检查登录状态
-    document.addEventListener('DOMContentLoaded', function () {
-        checkLoginStatus();
-    });
+    document.addEventListener('DOMContentLoaded', checkLoginStatus);
 </script>
 </body>
 </html>
