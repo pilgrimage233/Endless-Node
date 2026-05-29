@@ -9,9 +9,7 @@ import javax.net.ssl.SSLContext;
 import javax.net.ssl.TrustManager;
 import javax.net.ssl.X509TrustManager;
 import java.io.InputStream;
-import java.net.HttpURLConnection;
-import java.net.URL;
-import java.net.URLDecoder;
+import java.net.*;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -33,9 +31,6 @@ public class FileDownloadService {
         HttpURLConnection connection = null;
         try {
             log.info("Starting download from URL: {} to path: {}", url, path);
-
-            // 配置SSL上下文（信任所有证书）
-            configureTrustAllSSL();
 
             // 打开连接并处理重定向
             connection = openConnectionWithRedirects(url);
@@ -79,30 +74,26 @@ public class FileDownloadService {
     }
 
     /**
-     * 配置SSL上下文以信任所有证书
+     * 创建仅用于当前下载连接的 SSLContext（信任所有证书）。
+     * 不修改 JVM 全局默认值，避免影响其他 HTTPS 连接。
      */
-    private void configureTrustAllSSL() {
-        try {
-            SSLContext sslContext = SSLContext.getInstance("TLS");
-            TrustManager[] trustAllCerts = new TrustManager[]{
-                    new X509TrustManager() {
-                        public X509Certificate[] getAcceptedIssuers() {
-                            return new X509Certificate[0];
-                        }
-
-                        public void checkClientTrusted(X509Certificate[] certs, String authType) {
-                        }
-
-                        public void checkServerTrusted(X509Certificate[] certs, String authType) {
-                        }
+    private SSLContext createTrustAllSSLContext() throws Exception {
+        SSLContext sslContext = SSLContext.getInstance("TLS");
+        TrustManager[] trustAllCerts = new TrustManager[]{
+                new X509TrustManager() {
+                    public X509Certificate[] getAcceptedIssuers() {
+                        return new X509Certificate[0];
                     }
-            };
-            sslContext.init(null, trustAllCerts, new java.security.SecureRandom());
-            HttpsURLConnection.setDefaultSSLSocketFactory(sslContext.getSocketFactory());
-            HttpsURLConnection.setDefaultHostnameVerifier((hostname, session) -> true);
-        } catch (Exception e) {
-            log.warn("Failed to configure SSL context: {}", e.getMessage());
-        }
+
+                    public void checkClientTrusted(X509Certificate[] certs, String authType) {
+                    }
+
+                    public void checkServerTrusted(X509Certificate[] certs, String authType) {
+                    }
+                }
+        };
+        sslContext.init(null, trustAllCerts, new java.security.SecureRandom());
+        return sslContext;
     }
 
     /**
@@ -111,10 +102,20 @@ public class FileDownloadService {
     private HttpURLConnection openConnectionWithRedirects(String urlString) throws Exception {
         int redirectCount = 0;
         String currentUrl = urlString;
+        SSLContext trustAllContext = null;
 
         while (redirectCount < MAX_REDIRECTS) {
             URL url = new URL(currentUrl);
             HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+
+            // 仅对 HTTPS 连接应用局部 SSL 配置，不修改 JVM 全局默认值
+            if (connection instanceof HttpsURLConnection httpsConn) {
+                if (trustAllContext == null) {
+                    trustAllContext = createTrustAllSSLContext();
+                }
+                httpsConn.setSSLSocketFactory(trustAllContext.getSocketFactory());
+                httpsConn.setHostnameVerifier((hostname, session) -> true);
+            }
 
             // 设置请求属性
             connection.setConnectTimeout(CONNECT_TIMEOUT);
@@ -297,6 +298,66 @@ public class FileDownloadService {
             case "application/octet-stream":
             default:
                 return "";
+        }
+    }
+
+    /**
+     * 校验 URL 是否安全（非 SSRF 目标）。
+     * 解析主机名对应的 IP 地址，拒绝私有/环路/链路本地等内网地址。
+     *
+     * @param url 待校验的 URL 字符串
+     * @throws IllegalArgumentException 如果 URL 不安全或无法解析
+     */
+    public void validateUrlSafety(String url) {
+        if (url == null || url.trim().isEmpty()) {
+            throw new IllegalArgumentException("URL不能为空");
+        }
+
+        String lower = url.toLowerCase().trim();
+        if (!lower.startsWith("http://") && !lower.startsWith("https://")) {
+            throw new IllegalArgumentException("仅支持HTTP和HTTPS协议");
+        }
+
+        URL parsed;
+        try {
+            parsed = new URL(url);
+        } catch (MalformedURLException e) {
+            throw new IllegalArgumentException("URL格式不正确: " + e.getMessage());
+        }
+
+        String host = parsed.getHost();
+        if (host == null || host.isEmpty()) {
+            throw new IllegalArgumentException("URL缺少主机名");
+        }
+
+        // 解析主机名到 IP 地址（防止 DNS rebinding 也在此处覆盖）
+        InetAddress address;
+        try {
+            address = InetAddress.getByName(host);
+        } catch (UnknownHostException e) {
+            throw new IllegalArgumentException("无法解析主机名: " + host);
+        }
+
+        if (address.isLoopbackAddress()) {
+            throw new IllegalArgumentException("不允许访问本机地址");
+        }
+        if (address.isSiteLocalAddress()) {
+            throw new IllegalArgumentException("不允许访问内网地址");
+        }
+        if (address.isLinkLocalAddress()) {
+            throw new IllegalArgumentException("不允许访问链路本地地址");
+        }
+        if (address.isAnyLocalAddress()) {
+            throw new IllegalArgumentException("不允许访问通配地址");
+        }
+        if (address.isMulticastAddress()) {
+            throw new IllegalArgumentException("不允许访问组播地址");
+        }
+
+        // 显式阻断云元数据服务地址 (169.254.169.254)
+        String hostAddress = address.getHostAddress();
+        if (hostAddress != null && hostAddress.startsWith("169.254.")) {
+            throw new IllegalArgumentException("不允许访问链路本地地址");
         }
     }
 
