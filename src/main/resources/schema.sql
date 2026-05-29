@@ -44,11 +44,11 @@ CREATE TABLE IF NOT EXISTS server_instances
     port          INTEGER  DEFAULT 25565,     -- 服务端口
     jvm_args      TEXT,                       -- JVM启动参数
     memory_mb     INTEGER  DEFAULT 1024,      -- 分配内存 (MB)
-    created_by    INTEGER NOT NULL,           -- 关联 master_nodes.id
+    created_by    TEXT    NOT NULL,           -- 关联 master_nodes.uuid
     created_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at    DATETIME,
 
-    FOREIGN KEY (created_by) REFERENCES master_nodes (id)
+    FOREIGN KEY (created_by) REFERENCES master_nodes (uuid)
 );
 
 CREATE INDEX IF NOT EXISTS idx_instance_status ON server_instances (status, core_type);
@@ -90,6 +90,46 @@ CREATE TABLE IF NOT EXISTS users
 
 CREATE INDEX IF NOT EXISTS idx_users_username ON users (username);
 CREATE INDEX IF NOT EXISTS idx_users_enabled ON users (enabled);
+
+-- 定时任务表
+CREATE TABLE IF NOT EXISTS scheduled_tasks
+(
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    server_id       INTEGER NOT NULL,                -- 关联 server_instances.id
+    task_type       TEXT    NOT NULL,                 -- RESTART / BACKUP / COMMAND
+    cron_expression TEXT    NOT NULL,                 -- cron 表达式
+    payload         TEXT,                             -- 附带参数（命令内容等）
+    enabled         INTEGER DEFAULT 1,                -- 0:禁用 1:启用
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at      DATETIME
+);
+
+CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_server ON scheduled_tasks (server_id, enabled);
+
+-- 服务器资源指标表
+CREATE TABLE IF NOT EXISTS server_metrics
+(
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    server_id       INTEGER NOT NULL,
+    recorded_at     DATETIME DEFAULT CURRENT_TIMESTAMP,
+    cpu_percent     REAL,
+    memory_mb       REAL,
+    player_count    INTEGER,
+    max_players     INTEGER,
+    tps             REAL
+);
+
+CREATE INDEX IF NOT EXISTS idx_metrics_server_time ON server_metrics (server_id, recorded_at);
+
+-- Webhook 配置表
+CREATE TABLE IF NOT EXISTS webhooks
+(
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    url             TEXT    NOT NULL,                 -- 回调地址
+    events          TEXT    NOT NULL,                 -- 逗号分隔的事件列表
+    enabled         INTEGER DEFAULT 1,
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+);
 
 -- 初始数据示例
 INSERT OR IGNORE INTO node_metadata (key, value, description)
